@@ -1,0 +1,28 @@
+# .NET 构建产物
+**/bin/
+**/obj/
+
+# 前端
+**/node_modules/
+**/dist/
+*.local
+
+# 日志与调试
+*.log
+.cursor/debug-*.log
+
+# IDE
+.vs/
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 敏感配置（见下方说明）
+**/appsettings.Development.json
+**/appsettings.Local.json
+**/appsettings.json
+**/launchSettings.json

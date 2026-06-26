@@ -1,0 +1,47 @@
+---
+description: 
+globs: MES/**/*.sql
+alwaysApply: false
+---
+
+# MES SQL Server 规范
+
+## 基本约束
+
+- 使用 SQL Server（T-SQL）语法，目标库为 **OrBitMOMTestBack**。
+- 表结构脚本放 `MES/table/`，存储过程放 `MES/procedure/`。
+- 写 SQL 前必须先查阅 `MES/table/` 中对应表的真实字段，禁止猜测字段名。
+
+## 注释（强制）
+
+每段核心业务逻辑前必须有中文注释：
+
+```sql
+-- 【校验】检查仓库是否存在
+IF NOT EXISTS (SELECT 1 FROM Workcenter WHERE WorkcenterId = @WorkcenterId)
+BEGIN
+    SET @I_ReturnMessage = N'仓库不存在'
+    RETURN -1
+END
+
+-- 【更新】按批号同步库存数量
+UPDATE WW_RMInventory SET Qty = @Qty WHERE ...
+```
+
+## 安全
+
+```sql
+-- ❌ 禁止
+EXEC('SELECT * FROM Product WHERE ProductId = ''' + @Id + '''')
+
+-- ✅ 使用参数
+SELECT * FROM Product WHERE ProductId = @Id
+```
+
+## OrBit 存储过程
+
+SaveData / DoMethod 类过程须保留标准 `@I_*` 接口参数；失败时 `SET @I_ReturnMessage` 并 `RETURN -1`。
+
+## 事务
+
+多步写操作使用显式事务；按业务单元（如按仓库）独立事务时在注释中说明范围。
