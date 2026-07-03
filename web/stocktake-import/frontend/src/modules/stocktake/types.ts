@@ -8,6 +8,7 @@ export interface StocktakeRow {
   uomName: string
   sapBatchNo: string
   lotSN?: string | null
+  productionDate?: string | null
 }
 
 export interface ApiResponse<T> {
@@ -47,4 +48,23 @@ export interface StocktakeProcedureResult {
   successWarehouses?: number
   failedWarehouses?: number
   details?: WarehouseDetail[]
+}
+
+export interface CheckDetail {
+  checkType?: string
+  factoryName?: string
+  warehouseName?: string
+  productNo?: string
+  sapBatchNo?: string
+  expectedQty?: number | null
+  actualQty?: number | null
+  diffQty?: number | null
+}
+
+export interface StocktakeCheckResult {
+  result?: boolean
+  message?: string
+  totalRows?: number
+  issueCount?: number
+  details?: CheckDetail[]
 }

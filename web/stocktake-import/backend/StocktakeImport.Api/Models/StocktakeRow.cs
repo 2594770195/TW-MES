@@ -14,4 +14,9 @@ public class StocktakeRow
     public string UOMName { get; set; } = string.Empty;
     public string SAPBatchNo { get; set; } = string.Empty;
     public string? LotSN { get; set; }
+
+    /// <summary>
+    /// 生产日期，选填；新增库存时存在则作为 ProductionDate
+    /// </summary>
+    public DateTime? ProductionDate { get; set; }
 }

@@ -4,11 +4,16 @@ import { checkHealth } from '../../api/health'
 import { DbStatusBadge, type DbConnectionStatus } from '../../components/DbStatusBadge'
 import type { ModuleLayoutContext } from '../../layout/ModuleLayout'
 import {
+  checkStocktake,
   downloadTemplate,
   executeStocktake,
   importExcel,
 } from './api'
-import type { StocktakeProcedureResult, StocktakeRow } from './types'
+import type {
+  StocktakeCheckResult,
+  StocktakeProcedureResult,
+  StocktakeRow,
+} from './types'
 
 export default function StocktakePage() {
   const { setHeaderExtra } = useOutletContext<ModuleLayoutContext>()
@@ -23,6 +28,7 @@ export default function StocktakePage() {
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
   const [procedureResult, setProcedureResult] = useState<StocktakeProcedureResult | null>(null)
+  const [checkResult, setCheckResult] = useState<StocktakeCheckResult | null>(null)
 
   useEffect(() => {
     checkHealth()
@@ -69,6 +75,7 @@ export default function StocktakePage() {
     setLoading(true)
     setMessage('')
     setProcedureResult(null)
+    setCheckResult(null)
     setImported(false)
 
     try {
@@ -104,6 +111,7 @@ export default function StocktakePage() {
     setLoading(true)
     setMessage('')
     setProcedureResult(null)
+    setCheckResult(null)
 
     try {
       const res = await executeStocktake(dryRun, createUserId)
@@ -111,6 +119,22 @@ export default function StocktakePage() {
       setProcedureResult(res.data?.parsed ?? null)
     } catch {
       setMessage('执行失败，请检查网络和后端日志')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleCheck() {
+    setLoading(true)
+    setMessage('')
+    setCheckResult(null)
+
+    try {
+      const res = await checkStocktake()
+      setMessage(res.message)
+      setCheckResult((res.data?.parsed as unknown as StocktakeCheckResult) ?? null)
+    } catch {
+      setMessage('校验失败，请检查网络和后端日志')
     } finally {
       setLoading(false)
     }
@@ -134,6 +158,7 @@ export default function StocktakePage() {
                   setRows([])
                   setParseErrors([])
                   setProcedureResult(null)
+                  setCheckResult(null)
                 }}
                 className="block w-full max-w-md text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-slate-800"
               />
@@ -184,6 +209,14 @@ export default function StocktakePage() {
               className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:bg-red-300"
             >
               正式更新
+            </button>
+            <button
+              type="button"
+              onClick={handleCheck}
+              disabled={loading}
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-emerald-300"
+            >
+              校验结果
             </button>
           </div>
         </div>
@@ -242,6 +275,7 @@ export default function StocktakePage() {
                   <th className="px-3 py-2 text-right font-medium text-slate-600">冻结数量</th>
                   <th className="px-3 py-2 text-left font-medium text-slate-600">单位</th>
                   <th className="px-3 py-2 text-left font-medium text-slate-600">SAP批号</th>
+                  <th className="px-3 py-2 text-left font-medium text-slate-600">生产日期</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white">
@@ -255,6 +289,7 @@ export default function StocktakePage() {
                     <td className="px-3 py-2 text-right">{row.frozenQty ?? 0}</td>
                     <td className="px-3 py-2">{row.uomName}</td>
                     <td className="px-3 py-2">{row.sapBatchNo}</td>
+                    <td className="px-3 py-2">{row.productionDate ? row.productionDate.slice(0, 10) : '-'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -347,6 +382,87 @@ export default function StocktakePage() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+        </section>
+      )}
+
+      {checkResult && (
+        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-4 flex flex-wrap items-center gap-3">
+            <h2 className="text-lg font-semibold">校验结果</h2>
+            <span
+              className={`rounded-full px-3 py-1 text-xs font-medium ${
+                checkResult.result
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : 'bg-red-100 text-red-700'
+              }`}
+            >
+              {checkResult.result ? '校验通过' : '存在差异'}
+            </span>
+          </div>
+
+          <p className="text-sm text-slate-700">{checkResult.message}</p>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <div className="rounded-xl bg-slate-50 p-4">
+              <div className="text-xs text-slate-500">盘点口径行数</div>
+              <div className="mt-1 text-2xl font-semibold">{checkResult.totalRows ?? 0}</div>
+            </div>
+            <div className="rounded-xl bg-red-50 p-4">
+              <div className="text-xs text-red-700">差异数</div>
+              <div className="mt-1 text-2xl font-semibold text-red-800">
+                {checkResult.issueCount ?? 0}
+              </div>
+            </div>
+          </div>
+
+          {checkResult.details && checkResult.details.length > 0 ? (
+            <div className="mt-6 overflow-x-auto rounded-xl border border-slate-200">
+              <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="px-3 py-2 text-left">差异类型</th>
+                    <th className="px-3 py-2 text-left">工厂</th>
+                    <th className="px-3 py-2 text-left">仓库</th>
+                    <th className="px-3 py-2 text-left">物料号</th>
+                    <th className="px-3 py-2 text-left">SAP批号</th>
+                    <th className="px-3 py-2 text-right">应有数量</th>
+                    <th className="px-3 py-2 text-right">实际在库</th>
+                    <th className="px-3 py-2 text-right">差异</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {checkResult.details.map((item, index) => (
+                    <tr key={`${item.checkType ?? ''}-${item.sapBatchNo ?? ''}-${index}`}>
+                      <td className="px-3 py-2">
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800">
+                          {item.checkType}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">{item.factoryName}</td>
+                      <td className="px-3 py-2">{item.warehouseName}</td>
+                      <td className="px-3 py-2">{item.productNo}</td>
+                      <td className="px-3 py-2">{item.sapBatchNo}</td>
+                      <td className="px-3 py-2 text-right">{item.expectedQty ?? '-'}</td>
+                      <td className="px-3 py-2 text-right">{item.actualQty ?? '-'}</td>
+                      <td
+                        className={`px-3 py-2 text-right font-medium ${
+                          (item.diffQty ?? 0) === 0
+                            ? 'text-slate-500'
+                            : 'text-red-600'
+                        }`}
+                      >
+                        {item.diffQty ?? '-'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="mt-6 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+              未发现差异，盘点后库存数量正确。
             </div>
           )}
         </section>

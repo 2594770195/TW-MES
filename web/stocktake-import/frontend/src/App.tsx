@@ -4,6 +4,8 @@ import { ModuleLayout } from './layout/ModuleLayout'
 import HomePage from './pages/HomePage'
 
 const StocktakePage = lazy(() => import('./modules/stocktake'))
+const SapInventoryPage = lazy(() => import('./modules/sap-inventory'))
+const IndexFragmentationPage = lazy(() => import('./modules/index-fragmentation'))
 
 function PageLoader() {
   return (
@@ -24,6 +26,22 @@ function App() {
             element={
               <Suspense fallback={<PageLoader />}>
                 <StocktakePage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/sap-inventory"
+            element={
+              <Suspense fallback={<PageLoader />}>
+                <SapInventoryPage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/index-fragmentation"
+            element={
+              <Suspense fallback={<PageLoader />}>
+                <IndexFragmentationPage />
               </Suspense>
             }
           />

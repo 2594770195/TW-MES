@@ -19,6 +19,8 @@ public interface IStocktakeDbService
         string createUserId,
         bool dryRun,
         CancellationToken cancellationToken = default);
+    Task<string> CheckStocktakeAsync(
+        CancellationToken cancellationToken = default);
 }
 
 public class StocktakeDbService : IStocktakeDbService
@@ -76,6 +78,35 @@ public class StocktakeDbService : IStocktakeDbService
 
         try
         {
+            // 【合并】按工厂、仓库、物料号、SAP批号汇总 StockQty 与 FrozenQty，其他字段取最小行号对应行
+            var mergedRows = rows
+                .GroupBy(r => new
+                {
+                    FactoryName = r.FactoryName.Trim(),
+                    WarehouseName = r.WarehouseName.Trim(),
+                    ProductNo = r.ProductNo.Trim(),
+                    SAPBatchNo = r.SAPBatchNo.Trim()
+                })
+                .Select(g =>
+                {
+                    var first = g.OrderBy(x => x.RowNo).First();
+                    return new StocktakeRow
+                    {
+                        RowNo = g.Min(x => x.RowNo),
+                        FactoryName = g.Key.FactoryName,
+                        WarehouseName = g.Key.WarehouseName,
+                        ProductNo = g.Key.ProductNo,
+                        SAPBatchNo = g.Key.SAPBatchNo,
+                        StockQty = g.Sum(x => x.StockQty),
+                        FrozenQty = g.Sum(x => x.FrozenQty),
+                        UOMName = first.UOMName,
+                        LotSN = first.LotSN,
+                        ProductionDate = g.Select(x => x.ProductionDate).FirstOrDefault(x => x.HasValue) ?? first.ProductionDate
+                    };
+                })
+                .OrderBy(r => r.RowNo)
+                .ToList();
+
             // 【清空暂存表】每次导入前先清理上次数据
             await connection.ExecuteAsync(
                 new CommandDefinition(
@@ -88,16 +119,16 @@ public class StocktakeDbService : IStocktakeDbService
                 INSERT INTO dbo.TempStocktakeData
                 (
                     RowNo, FactoryName, WarehouseName, ProductNo,
-                    StockQty, FrozenQty, UOMName, SAPBatchNo, LotSN, CreateUserId
+                    StockQty, FrozenQty, UOMName, SAPBatchNo, LotSN, ProductionDate, CreateUserId
                 )
                 VALUES
                 (
                     @RowNo, @FactoryName, @WarehouseName, @ProductNo,
-                    @StockQty, @FrozenQty, @UOMName, @SAPBatchNo, @LotSN, @CreateUserId
+                    @StockQty, @FrozenQty, @UOMName, @SAPBatchNo, @LotSN, @ProductionDate, @CreateUserId
                 );
                 """;
 
-            foreach (var row in rows)
+            foreach (var row in mergedRows)
             {
                 await connection.ExecuteAsync(
                     new CommandDefinition(
@@ -113,6 +144,7 @@ public class StocktakeDbService : IStocktakeDbService
                             UOMName = row.UOMName.Trim(),
                             SAPBatchNo = row.SAPBatchNo.Trim(),
                             LotSN = string.IsNullOrWhiteSpace(row.LotSN) ? null : row.LotSN.Trim(),
+                            ProductionDate = row.ProductionDate,
                             CreateUserId = trimmedUserId
                         },
                         transaction: transaction,
@@ -120,7 +152,7 @@ public class StocktakeDbService : IStocktakeDbService
             }
 
             await transaction.CommitAsync(cancellationToken);
-            return rows.Count;
+            return mergedRows.Count;
         }
         catch
         {
@@ -152,6 +184,28 @@ public class StocktakeDbService : IStocktakeDbService
         await connection.ExecuteAsync(
             new CommandDefinition(
                 "dbo.Batch_StocktakeUpdateRMInventory",
+                parameters,
+                commandType: CommandType.StoredProcedure,
+                cancellationToken: cancellationToken));
+
+        return parameters.Get<string>("@I_ReturnMessage") ?? "{}";
+    }
+
+    /// <summary>
+    /// 调用盘点校验存储过程，对比 TempStocktakeData 与 WW_RMInventory 实际在库数量
+    /// </summary>
+    public async Task<string> CheckStocktakeAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        var parameters = new DynamicParameters();
+        parameters.Add("@I_ReturnMessage", dbType: DbType.String, size: -1, direction: ParameterDirection.Output);
+
+        await connection.ExecuteAsync(
+            new CommandDefinition(
+                "dbo.Batch_StocktakeCheckRMInventory",
                 parameters,
                 commandType: CommandType.StoredProcedure,
                 cancellationToken: cancellationToken));

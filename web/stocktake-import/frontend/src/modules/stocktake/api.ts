@@ -36,6 +36,13 @@ export async function executeStocktake(
   })
 }
 
+export async function checkStocktake(): Promise<ApiResponse<ExecuteStocktakeResult>> {
+  return requestJson('/api/stocktake/check', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
 export function downloadTemplate() {
   window.open('/api/stocktake/template', '_blank')
 }

@@ -12,6 +12,9 @@ builder.Services.AddSwaggerGen();
 
 builder.Services.AddScoped<IStocktakeExcelService, StocktakeExcelService>();
 builder.Services.AddScoped<IStocktakeDbService, StocktakeDbService>();
+builder.Services.AddScoped<ISapInventoryExcelService, SapInventoryExcelService>();
+builder.Services.AddScoped<ISapInventoryDbService, SapInventoryDbService>();
+builder.Services.AddScoped<IIndexFragmentationDbService, IndexFragmentationDbService>();
 
 builder.Services.AddCors(options =>
 {

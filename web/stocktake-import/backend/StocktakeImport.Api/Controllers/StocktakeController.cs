@@ -159,4 +159,40 @@ public class StocktakeController : ControllerBase
             return Ok(ApiResponse<ExecuteStocktakeResult>.Fail("执行盘点更新失败，请稍后重试或联系管理员"));
         }
     }
+
+    /// <summary>
+    /// 校验盘点结果：对比 TempStocktakeData 与 WW_RMInventory 实际在库数量
+    /// </summary>
+    [HttpPost("check")]
+    public async Task<ActionResult<ApiResponse<ExecuteStocktakeResult>>> Check(
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var rawJson = await _dbService.CheckStocktakeAsync(cancellationToken);
+
+            object? parsed = null;
+            try
+            {
+                parsed = JsonSerializer.Deserialize<object>(rawJson);
+            }
+            catch
+            {
+                // 返回原始 JSON 字符串即可
+            }
+
+            var result = new ExecuteStocktakeResult
+            {
+                RawJson = rawJson,
+                Parsed = parsed
+            };
+
+            return Ok(ApiResponse<ExecuteStocktakeResult>.Ok(result, "盘点校验执行完成"));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "执行盘点校验存储过程失败");
+            return Ok(ApiResponse<ExecuteStocktakeResult>.Fail("执行盘点校验失败，请稍后重试或联系管理员"));
+        }
+    }
 }

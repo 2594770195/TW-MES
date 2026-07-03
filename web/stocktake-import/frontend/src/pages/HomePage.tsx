@@ -58,7 +58,7 @@ export default function HomePage() {
 
       <main className="mx-auto max-w-6xl px-6 py-8">
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {moduleEntries.map((entry) => (
+          {moduleEntries.filter((entry) => !entry.hidden).map((entry) => (
             <article
               key={entry.id}
               className={`flex flex-col rounded-2xl border bg-white p-6 shadow-sm ${

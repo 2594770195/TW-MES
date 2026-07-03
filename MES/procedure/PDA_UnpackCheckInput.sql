@@ -3,7 +3,7 @@ GO
 SET QUOTED_IDENTIFIER ON
 GO
 -- =============================================
--- Author:      <OrBit Team>
+-- Author:      <>
 -- Create date: <2026/06/23>
 -- Description: <PDA拆包装扫码记录>
 -- Revision: 1.01

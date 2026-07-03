@@ -23,6 +23,11 @@ public class StocktakeExcelService : IStocktakeExcelService
         "批号", "MES批号", "批号/MES批号", "批号 / MES批号"
     ];
 
+    private static readonly string[] OptionalProductionDateHeaders =
+    [
+        "生产日期", "生产日期(选填)", "生产日期（选填）"
+    ];
+
     /// <summary>
     /// 解析盘点 Excel，按模板列名读取并校验必填项
     /// </summary>
@@ -115,6 +120,34 @@ public class StocktakeExcelService : IStocktakeExcelService
                 stocktakeRow.LotSN = NullIfEmpty(GetCellText(row, columnMap[lotSnColumn]));
             }
 
+            // 【生产日期】可选列，缺省或留空时为 null
+            var productionDateColumn = OptionalProductionDateHeaders.FirstOrDefault(columnMap.ContainsKey);
+            if (productionDateColumn is not null)
+            {
+                var cell = row.Cell(columnMap[productionDateColumn]);
+                if (!cell.IsEmpty())
+                {
+                    if (cell.DataType == XLDataType.DateTime)
+                    {
+                        stocktakeRow.ProductionDate = cell.GetDateTime();
+                    }
+                    else
+                    {
+                        var dateText = cell.GetString().Trim();
+                        if (!string.IsNullOrWhiteSpace(dateText))
+                        {
+                            if (!DateTime.TryParse(dateText, out var productionDate))
+                            {
+                                result.Errors.Add($"第 {rowIndex} 行：生产日期「{dateText}」不是有效日期");
+                                continue;
+                            }
+
+                            stocktakeRow.ProductionDate = productionDate;
+                        }
+                    }
+                }
+            }
+
             if (string.IsNullOrWhiteSpace(stocktakeRow.FactoryName) ||
                 string.IsNullOrWhiteSpace(stocktakeRow.WarehouseName) ||
                 string.IsNullOrWhiteSpace(stocktakeRow.ProductNo) ||
@@ -145,7 +178,7 @@ public class StocktakeExcelService : IStocktakeExcelService
         using var workbook = new XLWorkbook();
         var sheet = workbook.AddWorksheet("盘点数据");
 
-        var headers = new[] { "工厂", "仓库", "物料号", "库存数量", "冻结数量", "单位", "SAP批号", "批号 / MES批号" };
+        var headers = new[] { "工厂", "仓库", "物料号", "库存数量", "冻结数量", "单位", "SAP批号", "批号 / MES批号", "生产日期" };
         for (var i = 0; i < headers.Length; i++)
         {
             sheet.Cell(1, i + 1).Value = headers[i];
@@ -160,6 +193,7 @@ public class StocktakeExcelService : IStocktakeExcelService
         sheet.Cell(2, 5).Value = 0m;
         sheet.Cell(2, 6).Value = "KG";
         sheet.Cell(2, 7).Value = "SAPBATCH001";
+        sheet.Cell(2, 9).Value = "2026-06-01";
 
         sheet.Cell(3, 1).Value = "一厂";
         sheet.Cell(3, 2).Value = "原材料仓";

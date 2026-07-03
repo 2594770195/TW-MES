@@ -17,11 +17,27 @@ frontend/src/
 
 ## 功能
 
+### 库存盘点导入（原材料，`/stocktake`）
+
 - 下载标准 Excel 模板
 - 上传并解析盘点 Excel
 - 预览模式（DryRun=1）：只校验和统计，不修改库存
 - 正式更新（DryRun=0）：写入 `WW_RMInventory`
 - 展示按仓库的处理结果（更新 / 新增 / 置出库）
+
+### 索引碎片查询（`/index-fragmentation`）
+
+- 查询当前连接数据库中碎片率超过指定阈值的表及索引（只读）
+- 默认阈值 80%，可调整；结果按碎片率从高到低排序
+- 调用存储过程 `dbo.Batch_QueryIndexFragmentation`（底层使用 `sys.dm_db_index_physical_stats`）
+
+### 半成品盘点（`/sap-inventory`）
+
+- 下载半成品 Excel 模板
+- 上传 Excel 解析校验（含字段长度校验），按「工厂+仓库」覆盖写入 `SAP_PRODUCT_INVENTORY`
+- 填写/确认工厂、仓库后，调用存储过程 `dbo.UpdateInventoryBySAP_BCP` 更新 `WW_RMInventory`
+- 执行前先预检工厂仓库是否存在，避免存储过程“找不到仓库”仅提示不中止的问题
+- 半成品 Excel 列：工厂、仓库、物料、批号（必填）；在库数量、质检数量、锁定数量（至少一项）、单位、入库日期、备注（可选）
 
 ## Excel 模板列
 
@@ -35,6 +51,7 @@ frontend/src/
 | 单位 | 是 | 对应 `UOM.UOMName` 或 `ERPUnitcode` |
 | SAP批号 | 是 | 匹配 `WW_RMInventory.ProductionLotNO` |
 | 批号 / MES批号 | 否 | 可选，不参与主匹配 |
+| 生产日期 | 否 | 可选；新增库存时存在则优先作为 `ProductionDate` 及有效期计算基准 |
 
 ## 环境要求
 
@@ -95,6 +112,7 @@ npm run dev
 
 - 首页：`http://localhost:5173/` — MES 工具箱门户
 - 盘点：`http://localhost:5173/stocktake` — 库存盘点导入
+- 索引碎片：`http://localhost:5173/index-fragmentation` — 索引碎片查询
 
 ### 生产模式（单网址，后端托管前端）
 
@@ -131,6 +149,10 @@ dotnet run --launch-profile Development
 | GET | `/api/stocktake/template` | 下载 Excel 模板 |
 | POST | `/api/stocktake/import` | 上传 Excel 并写入 TempStocktakeData |
 | POST | `/api/stocktake/execute` | 从 TempStocktakeData 执行预览或正式更新 |
+| GET | `/api/sap-inventory/template` | 下载半成品 Excel 模板 |
+| POST | `/api/sap-inventory/import` | 上传 Excel 并覆盖写入 SAP_PRODUCT_INVENTORY |
+| POST | `/api/sap-inventory/execute` | 按工厂+仓库调用 `UpdateInventoryBySAP_BCP` |
+| GET | `/api/index-fragmentation/query?minPercent=80` | 查询碎片率超过阈值的索引 |
 
 ## 注意事项
 

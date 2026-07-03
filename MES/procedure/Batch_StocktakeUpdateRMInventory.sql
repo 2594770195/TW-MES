@@ -1,15 +1,22 @@
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
 -- =============================================
 -- Author:		Cursor AI
 -- Create date: 2026-06-18
 -- Description:	按盘点结果批量更新原材料库存，支持预览、按仓库独立事务、更新、新增（含数量不足补差额）、冻结和置出库
--- Revision: 1.04
+-- Revision: 1.07
 -- Revision History:
+--   1.07 2026-07-01 半成品盘点数量大于在库总量时，将差额加到同 SAP 批次最新一条在库记录，不再新增批次
+--   1.06 2026-06-27 新增库存时若 Excel 提供生产日期（TempStocktakeData.ProductionDate）则优先作为 ProductionDate 及有效期基准
+--   1.05 2026-06-27 新增库存时半成品（Product.ProductClassify='2'）内部批号优先使用 SAP批次+001，已存在则回退 WW_MP_LotSN 规则
 --   1.04 2026-06-24 新增库存时按 Product.SafeStorageTime 计算 ValidityEndDate，基准日期优先沿用同 SAP 批次已有库存
 --   1.03 2026-06-22 新增处理：Excel 冻结数量不为 0 时，将对应产品同一 SAP 批次的在库 LotStatus 置为 0（冻结）
 --   1.02 2026-06-22 新增处理：Excel 与库存表均存在但库存数量小于盘点数量时，按差额补足新增
 --   1.01 历史版本
 -- =============================================
-CREATE PROCEDURE [dbo].[Batch_StocktakeUpdateRMInventory]
+alter PROCEDURE [dbo].[Batch_StocktakeUpdateRMInventory]
     @I_ReturnMessage NVARCHAR(MAX) = '' OUTPUT, -- 返回 JSON 处理结果
     @CreateUserId CHAR(12) = '',                -- 操作人
     @DryRun BIT = 0                             -- 1=预览校验，0=正式更新
@@ -161,6 +168,7 @@ BEGIN
         LTRIM(RTRIM(s.UOMName)) AS UOMName,
         LTRIM(RTRIM(s.SAPBatchNo)) AS SAPBatchNo,
         NULLIF(LTRIM(RTRIM(ISNULL(s.LotSN, N''))), N'') AS SourceLotSN,
+        s.ProductionDate,
         f.FactoryId,
         wc.WorkcenterId,
         prod.ProductId,
@@ -249,6 +257,9 @@ BEGIN
     DECLARE @CandidateId INT = 0;
     DECLARE @NewWWId CHAR(12) = '';
     DECLARE @NewLotSN NVARCHAR(100) = N'';
+    DECLARE @CurrentProductClassify CHAR(10) = '';
+    DECLARE @CurrentSAPBatchNo NVARCHAR(100) = N'';
+    DECLARE @SemiLotSN NVARCHAR(100) = N'';
 
     SELECT @MaxRowId = MAX(RowId) FROM #WarehouseList;
 
@@ -345,11 +356,16 @@ BEGIN
         WHERE RunningQty - ISNULL(Qty, 0) >= StockQty;
 
         -- 【统计】计算需要新增的批次数量：包含库存表中完全不存在的批次，
-        --         以及库存表存在但在库总数量小于盘点数量、需补足差额的批次
+        --         以及非半成品在库总数量小于盘点数量、需补足差额的批次
+        --         （半成品有在库记录时差额改加到最新批次，不计入新增）
         SELECT @InsertedRows = COUNT(1)
         FROM #ResolvedStocktakeData s
+        INNER JOIN dbo.Product p WITH (NOLOCK)
+            ON p.ProductId = s.ProductId
         OUTER APPLY (
-            SELECT SUM(ISNULL(inv.Qty, 0)) AS ExistQty
+            SELECT
+                SUM(ISNULL(inv.Qty, 0)) AS ExistQty,
+                COUNT(1) AS ExistRows
             FROM dbo.WW_RMInventory inv WITH (NOLOCK)
             WHERE inv.FactoryId = s.FactoryId
               AND inv.WorkcenterId = s.WorkcenterId
@@ -359,7 +375,8 @@ BEGIN
         ) exist
         WHERE s.FactoryId = @CurrentFactoryId
           AND s.WorkcenterId = @CurrentWorkcenterId
-          AND s.StockQty - ISNULL(exist.ExistQty, 0) > 0;
+          AND s.StockQty - ISNULL(exist.ExistQty, 0) > 0
+          AND NOT (RTRIM(p.ProductClassify) = '2' AND ISNULL(exist.ExistRows, 0) > 0);
 
         -- 【统计】计算本仓库中 Excel 未出现的物料或 SAP 批次置出库数量
         SELECT @RemovedMissingRows = COUNT(1)
@@ -419,6 +436,47 @@ BEGIN
             INNER JOIN #MatchedInventory m
                 ON m.WWId = inv.WWId;
 
+            -- 【更新】半成品盘点数量大于在库总量时，将差额加到同 SAP 批次最新一条在库记录
+            UPDATE inv
+            SET
+                inv.Qty = inv.Qty + gap.AddQty,
+                inv.UOMId = gap.UOMId,
+                inv.ModifyDate = GETDATE()
+            FROM dbo.WW_RMInventory inv
+            INNER JOIN (
+                SELECT
+                    s.UOMId,
+                    s.StockQty - ISNULL(exist.ExistQty, 0) AS AddQty,
+                    latest.WWId
+                FROM #ResolvedStocktakeData s
+                INNER JOIN dbo.Product p WITH (NOLOCK)
+                    ON p.ProductId = s.ProductId
+                OUTER APPLY (
+                    SELECT SUM(ISNULL(inv2.Qty, 0)) AS ExistQty
+                    FROM dbo.WW_RMInventory inv2 WITH (NOLOCK)
+                    WHERE inv2.FactoryId = s.FactoryId
+                      AND inv2.WorkcenterId = s.WorkcenterId
+                      AND inv2.ProductId = s.ProductId
+                      AND inv2.ProductionLotNO = s.SAPBatchNo
+                      AND inv2.IsStorage = 1
+                ) exist
+                CROSS APPLY (
+                    SELECT TOP 1 inv3.WWId
+                    FROM dbo.WW_RMInventory inv3 WITH (NOLOCK)
+                    WHERE inv3.FactoryId = s.FactoryId
+                      AND inv3.WorkcenterId = s.WorkcenterId
+                      AND inv3.ProductId = s.ProductId
+                      AND inv3.ProductionLotNO = s.SAPBatchNo
+                      AND inv3.IsStorage = 1
+                    ORDER BY inv3.CreateDate DESC, inv3.WWId DESC
+                ) latest
+                WHERE s.FactoryId = @CurrentFactoryId
+                  AND s.WorkcenterId = @CurrentWorkcenterId
+                  AND RTRIM(p.ProductClassify) = '2'
+                  AND s.StockQty - ISNULL(exist.ExistQty, 0) > 0
+            ) gap
+                ON gap.WWId = inv.WWId;
+
             -- 【准备】找出需要新增的库存记录，后续逐行生成系统主键和内部批号
             IF OBJECT_ID('tempdb..#InsertCandidates') IS NOT NULL
                 DROP TABLE #InsertCandidates;
@@ -433,23 +491,33 @@ BEGIN
                 UOMId CHAR(12) NOT NULL,
                 InsertQty DECIMAL(18, 8) NOT NULL,
                 SAPBatchNo NVARCHAR(100) NOT NULL,
+                ProductClassify CHAR(10) NULL,
+                ProductionDate DATE NULL,
                 NewWWId CHAR(12) NULL,
                 NewLotSN NVARCHAR(100) NULL
             );
 
             -- 【准备】按盘点缺口生成待新增记录：新增数量 = 盘点数量 - 库存现有在库总数量。
-            --         库存不存在时缺口为全量，库存存在但不足时缺口为差额，仅缺口大于 0 才新增。
+            --         库存不存在时缺口为全量；非半成品在库不足时缺口为差额。
+            --         半成品已有在库记录时差额已加到最新批次，此处不再新增。
             INSERT INTO #InsertCandidates
             (
-                RowNo, FactoryId, WorkcenterId, ProductId, UOMId, InsertQty, SAPBatchNo
+                RowNo, FactoryId, WorkcenterId, ProductId, UOMId, InsertQty, SAPBatchNo, ProductClassify, ProductionDate
             )
             SELECT
                 s.RowNo, s.FactoryId, s.WorkcenterId, s.ProductId, s.UOMId,
                 s.StockQty - ISNULL(exist.ExistQty, 0),
-                s.SAPBatchNo
+                s.SAPBatchNo,
+                p.ProductClassify,
+                s.ProductionDate
             FROM #ResolvedStocktakeData s
+            -- 【关联】取物料分类，用于判断半成品（ProductClassify = '2'）以决定内部批号生成方式
+            INNER JOIN dbo.Product p WITH (NOLOCK)
+                ON p.ProductId = s.ProductId
             OUTER APPLY (
-                SELECT SUM(ISNULL(inv.Qty, 0)) AS ExistQty
+                SELECT
+                    SUM(ISNULL(inv.Qty, 0)) AS ExistQty,
+                    COUNT(1) AS ExistRows
                 FROM dbo.WW_RMInventory inv WITH (NOLOCK)
                 WHERE inv.FactoryId = s.FactoryId
                   AND inv.WorkcenterId = s.WorkcenterId
@@ -459,23 +527,18 @@ BEGIN
             ) exist
             WHERE s.FactoryId = @CurrentFactoryId
               AND s.WorkcenterId = @CurrentWorkcenterId
-              AND s.StockQty - ISNULL(exist.ExistQty, 0) > 0;
+              AND s.StockQty - ISNULL(exist.ExistQty, 0) > 0
+              AND NOT (RTRIM(p.ProductClassify) = '2' AND ISNULL(exist.ExistRows, 0) > 0);
 
             SELECT @InsertCount = COUNT(1) FROM #InsertCandidates;
 
             IF @InsertCount > 0
             BEGIN
-                -- 【新增】获取 MES 内部批号生成规则，缺少规则时阻断当前仓库
+                -- 【新增】获取 MES 内部批号生成规则，半成品命中 SAP批次+001 时无需该规则
                 SELECT TOP 1 @SNRuleId = SNRuleId
                 FROM dbo.SNRule WITH (NOLOCK)
                 WHERE SNRuleName = 'WW_MP_LotSN'
                   AND IsActivity = 1;
-
-                IF ISNULL(@SNRuleId, '') = ''
-                BEGIN
-                    SET @ErrorMsg = N'未找到启用的库存内部批号规则 WW_MP_LotSN，无法新增库存';
-                    RAISERROR(@ErrorMsg, 16, 1);
-                END;
 
                 SELECT @CandidateId = MIN(CandidateId) FROM #InsertCandidates;
 
@@ -484,16 +547,52 @@ BEGIN
                     SET @NewWWId = '';
                     SET @NewLotSN = N'';
                     SET @return_value = 0;
+                    SET @CurrentProductClassify = '';
+                    SET @CurrentSAPBatchNo = N'';
+                    SET @SemiLotSN = N'';
 
-                    -- 【新增】为待新增库存生成 WWId 和 MES 内部批号
+                    SELECT @CurrentProductClassify = ISNULL(ProductClassify, ''),
+                           @CurrentSAPBatchNo = SAPBatchNo
+                    FROM #InsertCandidates
+                    WHERE CandidateId = @CandidateId;
+
+                    -- 【新增】为待新增库存生成 WWId
                     EXEC dbo.SysGetObjectPKId '', 'WW_RMInventory', @NewWWId OUTPUT;
 
-                    EXEC @return_value = dbo.StartRuleSNDoMethod
-                        @I_ReturnMessage = @I_ReturnMessage OUTPUT,
-                        @SNRuleId = @SNRuleId,
-                        @RCharStr = N'',
-                        @JumpQty = 1,
-                        @NewSN = @NewLotSN OUTPUT;
+                    -- 【新增】半成品（ProductClassify = '2'）内部批号优先使用 SAP批次 + 001，
+                    --         若该批号在库存表或本次待新增中已存在，则回退至 WW_MP_LotSN 规则生成
+                    IF RTRIM(@CurrentProductClassify) = '2'
+                    BEGIN
+                        SET @SemiLotSN = LEFT(@CurrentSAPBatchNo + '001', 100);
+                        --以本次新增为准，旧的直接改批号
+                        IF EXISTS (SELECT 1 FROM dbo.WW_RMInventory WITH (NOLOCK) WHERE LotSN = @SemiLotSN)
+                            BEGIN
+                                update WW_RMInventory  set LotSN=lotsn+'-pd'  WHERE LotSN = @SemiLotSN
+                            END
+                        IF EXISTS (SELECT 1 FROM #InsertCandidates WHERE NewLotSN = @SemiLotSN)
+                            SET @SemiLotSN = N'';
+                    END;
+
+                    IF @SemiLotSN <> N''
+                    BEGIN
+                        SET @NewLotSN = @SemiLotSN;
+                    END
+                    ELSE
+                    BEGIN
+                        -- 【新增】按规则生成 MES 内部批号，缺少规则时阻断当前仓库
+                        IF ISNULL(@SNRuleId, '') = ''
+                        BEGIN
+                            SET @ErrorMsg = N'未找到启用的库存内部批号规则 WW_MP_LotSN，无法新增库存';
+                            RAISERROR(@ErrorMsg, 16, 1);
+                        END;
+
+                        EXEC @return_value = dbo.StartRuleSNDoMethod
+                            @I_ReturnMessage = @I_ReturnMessage OUTPUT,
+                            @SNRuleId = @SNRuleId,
+                            @RCharStr = N'',
+                            @JumpQty = 1,
+                            @NewSN = @NewLotSN OUTPUT;
+                    END;
 
                     IF ISNULL(@NewWWId, '') = '' OR ISNULL(@NewLotSN, N'') = N'' OR ISNULL(@return_value, 0) <> 0
                     BEGIN
@@ -576,9 +675,78 @@ BEGIN
                       AND inv.ProductionLotNO = ic.SAPBatchNo
                     ORDER BY inv.CreateDate DESC, inv.WWId DESC
                 ) existInv
-                -- 【计算】基准日期：优先 ProductionDate，其次 EntryDate，最后当前日期
+                -- 【计算】基准日期：优先 Excel 生产日期，其次同批次已有库存的 ProductionDate，再次 EntryDate，最后当前日期
                 CROSS APPLY (
-                    SELECT COALESCE(existInv.ProdDate, existInv.EntryDate, CAST(GETDATE() AS DATE)) AS StorageDateBase
+                    SELECT COALESCE(ic.ProductionDate, existInv.ProdDate, existInv.EntryDate, CAST(GETDATE() AS DATE)) AS StorageDateBase
+                ) base;
+
+                --盘点时新增的日志
+                INSERT INTO dbo.WW_RMInventory_20260701_pandianxinzeng
+                (
+                    WWId,
+                    LotSN,
+                    LotStatus,
+                    Qty,
+                    OrgQty,
+                    ProductId,
+                    UOMId,
+                    ProductionDate,
+                    ProductionLotNO,
+                    ReceiveDate,
+                    ValidityEndDate,
+                    FactoryId,
+                    WorkcenterId,
+                    IsStorage,
+                    IsInternalLot,
+                    Operator,
+                    ModifyDate,
+                    CreateDate
+                )
+                SELECT
+                    ic.NewWWId,
+                    ic.NewLotSN,
+                    '1',
+                    ic.InsertQty,
+                    ic.InsertQty,
+                    ic.ProductId,
+                    ic.UOMId,
+                    CONVERT(VARCHAR(50), base.StorageDateBase, 120),
+                    LEFT(ic.SAPBatchNo, 50),
+                    GETDATE(),
+                    -- 【计算】有效期：与 UpdateInventoryBySAP_BCP 口径一致
+                    CASE
+                        WHEN ISNULL(p.SafeStorageTime, 0) <= 0 THEN NULL
+                        ELSE ISNULL(
+                            TRY_CAST(DATEADD(DAY, p.SafeStorageTime, base.StorageDateBase) AS DATE),
+                            CAST('9999-12-31' AS DATE)
+                        )
+                    END,
+                    ic.FactoryId,
+                    ic.WorkcenterId,
+                    1,
+                    0,
+                    @CreateUserId,
+                    GETDATE(),
+                    GETDATE()
+                FROM #InsertCandidates ic
+                -- 【关联】取物料安全存储天数，用于计算有效期
+                INNER JOIN dbo.Product p WITH (NOLOCK)
+                    ON p.ProductId = ic.ProductId
+                -- 【关联】同 SAP 批次已有库存时，取最新一条的入库/生产日期作为有效期基准
+                OUTER APPLY (
+                    SELECT TOP 1
+                        TRY_CAST(NULLIF(LTRIM(RTRIM(inv.ProductionDate)), N'') AS DATE) AS ProdDate,
+                        CAST(inv.EntryDate AS DATE) AS EntryDate
+                    FROM dbo.WW_RMInventory inv WITH (NOLOCK)
+                    WHERE inv.FactoryId = ic.FactoryId
+                      AND inv.WorkcenterId = ic.WorkcenterId
+                      AND inv.ProductId = ic.ProductId
+                      AND inv.ProductionLotNO = ic.SAPBatchNo
+                    ORDER BY inv.CreateDate DESC, inv.WWId DESC
+                ) existInv
+                -- 【计算】基准日期：优先 Excel 生产日期，其次同批次已有库存的 ProductionDate，再次 EntryDate，最后当前日期
+                CROSS APPLY (
+                    SELECT COALESCE(ic.ProductionDate, existInv.ProdDate, existInv.EntryDate, CAST(GETDATE() AS DATE)) AS StorageDateBase
                 ) base;
             END;
 

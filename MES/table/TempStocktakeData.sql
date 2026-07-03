@@ -16,6 +16,7 @@ create table TempStocktakeData
     UOMName             nvarchar(50)   not null, -- 单位名称或单位编码
     SAPBatchNo          nvarchar(100)  not null, -- SAP批号，匹配 ProductionLotNO
     LotSN               nvarchar(100),           -- MES内部批号，非必填，不参与主匹配
+    ProductionDate      date,                    -- 生产日期，选填，新增库存时存在则作为 ProductionDate
     CreateUserId        char(12),                -- 导入操作人
     CreateDate          datetime
         constraint DF_TempStocktakeData_CreateDate default getdate() -- 导入时间
