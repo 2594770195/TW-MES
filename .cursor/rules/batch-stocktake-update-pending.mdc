@@ -1,0 +1,15 @@
+---
+description: Batch_StocktakeUpdateRMInventory 待测试/待修复提醒（修改前必读）
+globs: MES/procedure/Batch_StocktakeUpdateRMInventory.sql,web/stocktake-import/**/*
+alwaysApply: false
+---
+
+# 盘点存储过程 — 修改前提醒
+
+编辑 `Batch_StocktakeUpdateRMInventory` 或关联盘点导入代码前，**必须先向用户提醒**以下待办，并确认是否一并处理与测试：
+
+1. **v1.08 未测试**：更新库存数量时写入 `StocktakeUpdateLog`（表见 `MES/table/StocktakeUpdateLog.sql`）
+2. **v1.09 未测试**：新增半成品库存时，内部批号非 SAP批次+001 则将 `OrgLotSN` 设为 SAP批次+001
+3. **大文件导入待修**：约 300KB盘点 Excel 导入失败（`web/stocktake-import/` 与存储过程联调）
+
+未获用户确认前，不要仅做无关小改动而忽略上述项；若用户要求修改本过程，应主动询问是否同步修复大文件导入并完成 v1.08/v1.09 回归测试。

@@ -3,13 +3,13 @@ GO
 SET QUOTED_IDENTIFIER ON
 GO
 -- =============================================
--- Author:      <>
+-- Author:      <OrBit Team>
 -- Create date: <2026/06/23>
 -- Description: <PDA拆包装扫码记录>
 -- Revision: 1.01
 -- Update comment: 业务键由MOName改为LotSN，扫码流程为人员→批号→开始→结束
 -- =============================================
-CREATE PROCEDURE [dbo].[PDA_UnpackCheckInput]
+ALTER PROCEDURE [dbo].[PDA_UnpackCheckInput]
 @I_Sender NVARCHAR(200)='',              -- 客户端执行按钮
 @I_ReturnMessage NVARCHAR(MAX)='' OUTPUT,  -- 返回的信息,支持多语言
 @I_ExceptionFieldName NVARCHAR(100)='' OUTPUT, -- 向客户端报告引起冲突的字段
@@ -89,7 +89,6 @@ BEGIN
             IF NOT EXISTS(SELECT 1 FROM SysUser WHERE EmployeeNo=@InputScan)
             BEGIN
                 SET @I_ReturnMessage='ServerMessage:[员工工号]未维护，请重新扫描' + @Enter;
-                SET @I_ExceptionFieldName='EmployeeNo';
                 SELECT '' AS InputScan,'' AS EmployeeNo,'' AS LotSN,'' AS Command,'请扫描[员工工号]!' AS Tips;
                 RETURN -1;
             END;
@@ -105,8 +104,8 @@ BEGIN
         BEGIN
             IF NOT EXISTS(SELECT 1 FROM MOItemLot WHERE LotSN=@InputScan)
             BEGIN
-                SET @I_ReturnMessage='ServerMessage:[批次条码]不正确，请重新扫描' + @Enter;
-                SET @I_ExceptionFieldName='LotSN';
+                SET @I_ReturnMessage='ServerMessage:[批次条码]['+@InputScan+']不正确，请重新扫描' + @Enter;
+                SET @I_ExceptionFieldName='InputScan';
                 SELECT '' AS InputScan,@EmployeeNo AS EmployeeNo,'' AS LotSN,'' AS Command,'请扫描[批次条码]!' AS Tips;
                 RETURN -1;
             END;
@@ -122,13 +121,27 @@ BEGIN
             FROM Lot
             WHERE LotSN=@InputScan;
 
-            IF ISNULL(@LotId,'')=''
+            IF ISNULL(@LotId,'')='' 
             BEGIN
-                SET @I_ReturnMessage='ServerMessage:[批次条码]不存在，请重新扫描' + @Enter;
-                SET @I_ExceptionFieldName='LotSN';
+                SET @I_ReturnMessage='ServerMessage:[批次条码]['+@InputScan+']不存在，请重新扫描' + @Enter;
+                SET @I_ExceptionFieldName='InputScan';
                 SELECT '' AS InputScan,@EmployeeNo AS EmployeeNo,'' AS LotSN,'' AS Command,'请扫描[批次条码]!' AS Tips;
                 RETURN -1;
             END;
+            DECLARE @SpecificationName NVARCHAR(20)=''
+            DECLARE @SpecificationCode NVARCHAR(20)=''
+            SELECT @SpecificationName=SpecificationName,@SpecificationCode=SpecificationCode FROM Lot A
+			INNER JOIN Specification B ON A.SpecificationId=B.SpecificationId
+			INNER JOIN SpecificationRoot C ON B.SpecificationRootId=C.SpecificationRootId
+			WHERE  A.LotId=@LotId
+            IF ISNULL(@SpecificationCode,'') <>'UPACK'
+            BEGIN
+                SET @I_ReturnMessage='ServerMessage:工单批号['+@LotSN+']当前所在工序['+ISNULL(@SpecificationName,'')+']，不在当前工序节点!'+@Enter
+                SET @I_ExceptionFieldName='InputScan';
+                SELECT '' AS InputScan,@EmployeeNo AS EmployeeNo,'' AS LotSN,'' AS Command,'请扫描[批次条码]!' AS Tips;
+                RETURN -1;
+            END;
+            
 
             SET @I_ReturnMessage='ServerMessage:[批次条码]已扫描' + @Enter;
             SELECT '' AS InputScan,@EmployeeNo AS EmployeeNo,@LotSN AS LotSN,'' AS Command,'请扫描开始命令[CMDSTARTCB]!' AS Tips;
@@ -142,7 +155,7 @@ BEGIN
         IF @Command NOT IN ('CMDSTARTCB','CMDENDCB')
         BEGIN
             SET @I_ReturnMessage='ServerMessage:不可识别的操作指令，请扫描[CMDSTARTCB]或[CMDENDCB]' + @Enter;
-            SET @I_ExceptionFieldName='Command';
+            SET @I_ExceptionFieldName='InputScan';
             SELECT '' AS InputScan,@EmployeeNo AS EmployeeNo,@LotSN AS LotSN,'' AS Command,'请扫描命令[CMDSTARTCB/CMDENDCB]!' AS Tips;
             RETURN -1;
         END;
@@ -160,8 +173,8 @@ BEGIN
 
         IF ISNULL(@LotId,'')=''
         BEGIN
-            SET @I_ReturnMessage='ServerMessage:[批次条码]不存在，请重新扫描' + @Enter;
-            SET @I_ExceptionFieldName='LotSN';
+            SET @I_ReturnMessage='ServerMessage:[批次条码]['+@InputScan+']不存在，请重新扫描' + @Enter;
+            SET @I_ExceptionFieldName='InputScan';
             SELECT '' AS InputScan,@EmployeeNo AS EmployeeNo,'' AS LotSN,'' AS Command,'请扫描[批次条码]!' AS Tips;
             RETURN -1;
         END;

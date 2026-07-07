@@ -6,8 +6,10 @@ GO
 -- Author:		Cursor AI
 -- Create date: 2026-06-18
 -- Description:	按盘点结果批量更新原材料库存，支持预览、按仓库独立事务、更新、新增（含数量不足补差额）、冻结和置出库
--- Revision: 1.07
+-- Revision: 1.09
 -- Revision History:
+--   1.09 2026-07-03 新增半成品库存时，若内部批号非 SAP批次+001，则将 OrgLotSN 设为 SAP批次+001
+--   1.08 2026-07-03 更新库存数量时写入 StocktakeUpdateLog，记录物料号、批号、修改前后数量及 SAP 批次
 --   1.07 2026-07-01 半成品盘点数量大于在库总量时，将差额加到同 SAP 批次最新一条在库记录，不再新增批次
 --   1.06 2026-06-27 新增库存时若 Excel 提供生产日期（TempStocktakeData.ProductionDate）则优先作为 ProductionDate 及有效期基准
 --   1.05 2026-06-27 新增库存时半成品（Product.ProductClassify='2'）内部批号优先使用 SAP批次+001，已存在则回退 WW_MP_LotSN 规则
@@ -15,6 +17,10 @@ GO
 --   1.03 2026-06-22 新增处理：Excel 冻结数量不为 0 时，将对应产品同一 SAP 批次的在库 LotStatus 置为 0（冻结）
 --   1.02 2026-06-22 新增处理：Excel 与库存表均存在但库存数量小于盘点数量时，按差额补足新增
 --   1.01 历史版本
+--
+-- 【待办 / 未测试】2026-07-06
+--   - v1.08（StocktakeUpdateLog 数量变更日志）、v1.09（半成品 OrgLotSN 规则）尚未在测试/生产环境验证
+--   - 盘点 Excel 导入约 300kb，1万多行时失败（Web 导入 + 本存储过程联调待修）；下次修改本过程前须先处理并回归测试
 -- =============================================
 alter PROCEDURE [dbo].[Batch_StocktakeUpdateRMInventory]
     @I_ReturnMessage NVARCHAR(MAX) = '' OUTPUT, -- 返回 JSON 处理结果
@@ -417,6 +423,44 @@ BEGIN
             -- 【事务】当前仓库独立事务，失败时只回滚当前仓库
             BEGIN TRANSACTION StocktakeWarehouse;
 
+            -- 【日志】按 SAP 批次累计保留调整前，记录数量变更到 StocktakeUpdateLog
+            INSERT INTO dbo.StocktakeUpdateLog
+            (
+                BatchNo, ProductNo, LotSN, SAPBatchNo, BeforeQty, AfterQty,
+                WWId, FactoryId, WorkcenterId, UpdateType, CreateUserId, CreateDate
+            )
+            SELECT
+                @BatchNo,
+                pr.ProductName,
+                inv.LotSN,
+                inv.ProductionLotNO,
+                ISNULL(inv.Qty, 0),
+                CASE
+                    WHEN m.RunningQty <= m.StockQty THEN ISNULL(inv.Qty, 0)
+                    WHEN m.RunningQty - ISNULL(m.Qty, 0) < m.StockQty AND m.RunningQty > m.StockQty
+                        THEN m.StockQty - (m.RunningQty - ISNULL(m.Qty, 0))
+                    ELSE ISNULL(inv.Qty, 0)
+                END,
+                inv.WWId,
+                inv.FactoryId,
+                inv.WorkcenterId,
+                N'adjust',
+                NULLIF(@CreateUserId, ''),
+                GETDATE()
+            FROM dbo.WW_RMInventory inv WITH (NOLOCK)
+            INNER JOIN #MatchedInventory m
+                ON m.WWId = inv.WWId
+            INNER JOIN dbo.Product p WITH (NOLOCK)
+                ON p.ProductId = inv.ProductId
+            INNER JOIN dbo.ProductRoot pr WITH (NOLOCK)
+                ON pr.ProductRootId = p.ProductRootId
+            WHERE ISNULL(inv.Qty, 0) <> CASE
+                    WHEN m.RunningQty <= m.StockQty THEN ISNULL(inv.Qty, 0)
+                    WHEN m.RunningQty - ISNULL(m.Qty, 0) < m.StockQty AND m.RunningQty > m.StockQty
+                        THEN m.StockQty - (m.RunningQty - ISNULL(m.Qty, 0))
+                    ELSE ISNULL(inv.Qty, 0)
+                END;
+
             -- 【更新】按 SAP 批次累计保留最新库存批次，超出盘点数量的旧批次置为不在库
             UPDATE inv
             SET
@@ -435,6 +479,64 @@ BEGIN
             FROM dbo.WW_RMInventory inv
             INNER JOIN #MatchedInventory m
                 ON m.WWId = inv.WWId;
+
+            -- 【日志】半成品差额追加前，记录数量变更到 StocktakeUpdateLog
+            INSERT INTO dbo.StocktakeUpdateLog
+            (
+                BatchNo, ProductNo, LotSN, SAPBatchNo, BeforeQty, AfterQty,
+                WWId, FactoryId, WorkcenterId, UpdateType, CreateUserId, CreateDate
+            )
+            SELECT
+                @BatchNo,
+                pr.ProductName,
+                inv.LotSN,
+                inv.ProductionLotNO,
+                ISNULL(inv.Qty, 0),
+                ISNULL(inv.Qty, 0) + gap.AddQty,
+                inv.WWId,
+                inv.FactoryId,
+                inv.WorkcenterId,
+                N'semi_add',
+                NULLIF(@CreateUserId, ''),
+                GETDATE()
+            FROM dbo.WW_RMInventory inv
+            INNER JOIN (
+                SELECT
+                    s.UOMId,
+                    s.StockQty - ISNULL(exist.ExistQty, 0) AS AddQty,
+                    latest.WWId
+                FROM #ResolvedStocktakeData s
+                INNER JOIN dbo.Product p WITH (NOLOCK)
+                    ON p.ProductId = s.ProductId
+                OUTER APPLY (
+                    SELECT SUM(ISNULL(inv2.Qty, 0)) AS ExistQty
+                    FROM dbo.WW_RMInventory inv2 WITH (NOLOCK)
+                    WHERE inv2.FactoryId = s.FactoryId
+                      AND inv2.WorkcenterId = s.WorkcenterId
+                      AND inv2.ProductId = s.ProductId
+                      AND inv2.ProductionLotNO = s.SAPBatchNo
+                      AND inv2.IsStorage = 1
+                ) exist
+                CROSS APPLY (
+                    SELECT TOP 1 inv3.WWId
+                    FROM dbo.WW_RMInventory inv3 WITH (NOLOCK)
+                    WHERE inv3.FactoryId = s.FactoryId
+                      AND inv3.WorkcenterId = s.WorkcenterId
+                      AND inv3.ProductId = s.ProductId
+                      AND inv3.ProductionLotNO = s.SAPBatchNo
+                      AND inv3.IsStorage = 1
+                    ORDER BY inv3.CreateDate DESC, inv3.WWId DESC
+                ) latest
+                WHERE s.FactoryId = @CurrentFactoryId
+                  AND s.WorkcenterId = @CurrentWorkcenterId
+                  AND RTRIM(p.ProductClassify) = '2'
+                  AND s.StockQty - ISNULL(exist.ExistQty, 0) > 0
+            ) gap
+                ON gap.WWId = inv.WWId
+            INNER JOIN dbo.Product p WITH (NOLOCK)
+                ON p.ProductId = inv.ProductId
+            INNER JOIN dbo.ProductRoot pr WITH (NOLOCK)
+                ON pr.ProductRootId = p.ProductRootId;
 
             -- 【更新】半成品盘点数量大于在库总量时，将差额加到同 SAP 批次最新一条在库记录
             UPDATE inv
@@ -616,6 +718,7 @@ BEGIN
                 (
                     WWId,
                     LotSN,
+                    OrgLotSN,
                     LotStatus,
                     Qty,
                     OrgQty,
@@ -636,6 +739,13 @@ BEGIN
                 SELECT
                     ic.NewWWId,
                     ic.NewLotSN,
+                    -- 【新增】半成品内部批号回退规则生成时，记录来源批号为 SAP批次+001
+                    CASE
+                        WHEN RTRIM(p.ProductClassify) = '2'
+                             AND ic.NewLotSN <> LEFT(ic.SAPBatchNo + N'001', 100)
+                            THEN LEFT(ic.SAPBatchNo + N'001', 100)
+                        ELSE NULL
+                    END,
                     '1',
                     ic.InsertQty,
                     ic.InsertQty,

@@ -35,6 +35,15 @@
 - `stocktake-inventory-update/` 已确认任务 3：SAP 批号仅写入 `WW_RMInventory.ProductionLotNO`，本期不同步 `SAPRemark`；新增库存的 `LotSN` 使用系统批号规则 `WW_MP_LotSN` 生成。
 - `stocktake-inventory-update/` 已完成任务 4-14：新增存储过程脚本 `MES/procedure/Batch_StocktakeUpdateRMInventory.sql`，实现按仓库独立事务、DryRun 预览、已有库存累计保留更新、缺失库存新增、缺失物料或 SAP 批次置出库和 JSON 结果返回。
 - `stocktake-import/` Excel 导入已支持「冻结数量」列：解析后写入 `TempStocktakeData.FrozenQty`，存储过程在冻结数量不为 0 时将同一 SAP 批次的在库记录 `LotStatus` 置为 0。同一工厂、仓库、物料号、SAP批号的多行会在导入时自动合并 `StockQty` 与 `FrozenQty`。
+- `Batch_StocktakeUpdateRMInventory` v1.08 起，正式更新（DryRun=0）时数量变更写入 `StocktakeUpdateLog`（物料号、LotSN、SAP 批次、修改前/后数量），表结构见 `MES/table/StocktakeUpdateLog.sql`。
+
+### 盘点存储过程待办（2026-07-06）
+
+| 项 | 状态 | 说明 |
+|---|---|---|
+| v1.08 StocktakeUpdateLog | **未测试** | 数量变更日志写入逻辑待验证 |
+| v1.09 半成品 OrgLotSN | **未测试** | 非 SAP批次+001 时 OrgLotSN 规则待验证 |
+| 大文件 Excel 导入 | **待修改** | 约 30 万行盘点 Excel 导入失败，涉及 `web/stocktake-import/` 与本存储过程，修改前须先修复并回归 |
 
 ## 开发注意事项
 

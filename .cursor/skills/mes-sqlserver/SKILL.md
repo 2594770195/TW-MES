@@ -102,11 +102,45 @@ CREATE TABLE #WarehouseList ( ... );
 - 失败时设置 `@I_ReturnMessage` 并 `RETURN -1`（OrBit 风格）或 `RAISERROR`/`THROW`（批处理脚本）。
 - 不向前端或调用方暴露内部堆栈；错误信息应可理解、可定位。
 
+### @I_ReturnMessage 错误提示规范
+
+OrBit Save/DoMethod 类过程的业务校验失败时，**必须**设置 `@I_ReturnMessage` 并以 `ServerMessage:` 前缀返回；涉及**具体输入参数**的异常，**必须**在提示中拼接该参数的实际值，便于前端/操作员定位问题。
+
+**格式**：`ServerMessage:[参数中文名][参数值]错误描述`
+
+- 参数中文名用方括号 `[]` 包裹，表示字段/参数含义。
+- 参数值紧跟其后，同样用方括号 `[]` 包裹，通过字符串拼接写入变量值。
+- OrBit 过程若需换行，末尾加 `+ @Enter`（与现有过程保持一致）。
+
+```sql
+-- ❌ 不推荐：未带出具体参数值，操作员无法判断扫了什么
+SET @I_ReturnMessage = 'ServerMessage:[批次条码]不存在，请重新扫描' + @Enter;
+
+-- ✅ 推荐：带出具体参数值
+SET @I_ReturnMessage = 'ServerMessage:[批次条码][' + @LotSN + ']不存在，请重新扫描' + @Enter;
+
+-- ✅ 其他示例
+SET @I_ReturnMessage = 'ServerMessage:[工单号][' + @MOName + ']不存在，请检查!' + @Enter;
+SET @I_ReturnMessage = 'ServerMessage:[领料单号][' + @PickingListName + ']不存在，请检查!' + @Enter;
+```
+
+**适用场景**（必须带出参数值）：
+
+- 扫描/输入的单号、条码、批次号不存在或无效
+- 根据传入 ID/编码查不到主数据或业务单据
+- 参数格式正确但业务校验失败，且失败原因与传入值直接相关
+
+**可不拼接参数值**的场景：
+
+- 未选择行、未选有效记录等**无具体入参值**的操作提示（如 `请选择有效工单!`）
+- 系统内部错误、并发冲突等与单一输入值无关的异常
+
 ## 表结构脚本规范
 
 - 文件放在 `MES/table/<TableName>.sql`。
 - 修改前对照现有表脚本，保持字段命名风格（如 `char(12)` 主键、`nvarchar` 名称字段）。
 - 新增字段在脚本中用中文注释说明业务含义。
+- 新增表时必须使用 `sys.sp_addextendedproperty @name=N'MS_Description'` 写入表说明和每个字段说明，确保 SQL Server 表设计器的“说明”字段可见。
 - 历史表不需要修改，仅为备份
 
 ## 常见业务模块前缀
@@ -128,7 +162,7 @@ CREATE TABLE #WarehouseList ( ... );
 2. **查参考** — 在 `MES/procedure/` 找同类过程作模板。
 3. **读 spec** — 有规格文档则严格按 requirements/design 实现。
 4. **写脚本** — 遵循本节规范，分段中文注释。
-5. **自检** — 字段名、主键类型、事务范围、参数化、错误返回、临时表注释是否说明用途。
+5. **自检** — 字段名、主键类型、事务范围、参数化、错误返回（参数异常时 `@I_ReturnMessage` 是否带出具体参数值）、临时表注释是否说明用途；新增表是否已写入表级和字段级 `MS_Description` 说明。
 
 ## 输出要求
 

@@ -59,6 +59,7 @@ frontend/src/
 - Node.js 18+
 - 能访问 SQL Server：`192.73.80.142:36257`
 - 数据库中已部署表结构 `MES/table/TempStocktakeData.sql`
+- 数据库中已部署表结构 `MES/table/StocktakeUpdateLog.sql`（盘点数量变更日志）
 - 数据库中已部署存储过程 `MES/procedure/Batch_StocktakeUpdateRMInventory.sql`
 
 ## 配置数据库
@@ -156,6 +157,7 @@ dotnet run --launch-profile Development
 
 ## 注意事项
 
+- **已知问题（2026-07-06）**：约 30 万行盘点 Excel 导入会失败，尚未修复；`Batch_StocktakeUpdateRMInventory` v1.08/v1.09 亦未测试。下次修改存储过程或导入逻辑前须先处理并回归。
 - 正式更新前务必先预览，并确认 Excel 已覆盖该仓库全部物料
 - 同一工厂、仓库、物料号、SAP批号不能重复
 - 数据库账号密码请勿提交到 Git 仓库
