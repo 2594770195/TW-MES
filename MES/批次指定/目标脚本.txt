@@ -1,0 +1,175 @@
+using System;
+using System.Windows.Forms;
+using System.Text;
+using System.Data;
+using System.Reflection;
+using System.Xml;
+using System.Net;
+using System.Net.Sockets;
+using System.IO;
+using System.Drawing ;
+using System.IO.Ports;
+using System.Collections;
+
+/* OrBit-Script脚本
+ * 作    者：
+ * 功能描述：
+ * 版 本 号：
+ * 发布日期:
+ * 最后修改:
+ */ 
+namespace ScriptProj
+{
+    public class OrBitClass
+    {
+
+        /// <summary>
+        /// MES事务插件接口全局对象，它提供了MES事务对象的所有的接口属性与接口方法
+        /// </summary>
+        public OrBitScript.OrBitAPI Scripter = new OrBitScript.OrBitAPI(); 
+
+        /// <summary>
+        /// 脚本对象实例化时加载时的方法
+        /// </summary>
+        public void ScriptLoad()
+        {
+        	//to do..
+        }
+	    
+		
+		/// <summary>
+		/// 脚本在退出前的询问方法
+		/// </summary>
+		/// <returns>True则退出，False则取消退出</returns>
+        public bool ScriptClosing()
+        {
+			//to do..
+			return true;
+        }
+		
+        /// <summary>
+        /// MES事务对象在关闭时卸载此脚本对象的方法
+        /// </summary>
+        public void ScriptUnLoad()
+        {
+		    //to do..
+        }
+
+		/// <summary>
+		/// Winsocket消息接受方法
+		/// </summary>
+		/// <param name="MsgString">消息的内容</param>
+		public void WinsocketMessage(string MsgString)
+		{
+			//to do..  	
+			
+		}
+
+        /// <summary>
+        /// MES事务插件Tab页选中时的脚本对象执行的方法
+        /// </summary>
+        public void TabActive()
+        {
+		    //to do..
+        }
+        
+        /// <summary>
+        /// 容器中按钮触发时的通用检查前置事件
+        /// </summary>
+        /// <param name="ButtonName">按钮名</param>
+        /// <returns>True表示继续,False表示退回</returns>
+        public bool ButtonClickBefore(string ButtonName)
+        {
+ 		    //to do..
+	       	return true;         
+        }
+        
+        /// <summary>
+        /// 容器中按钮通用触发事件
+        /// </summary>
+        /// <param name="ButtonName">按钮名</param>
+        public void ButtonClick(string ButtonName)
+        {
+		    //to do..
+        }
+
+        /// <summary>
+        /// 容器中按钮触发时的通用检查后置事件
+        /// </summary>
+        /// <param name="ButtonName">按钮名</param>
+		/// <param name="SPResult">存储过程执行的结果值</param>
+		/// <param name="SPMessage">存储过程执行的返回消息</param>
+        public void ButtonClickAfter(string ButtonName,bool SPResult,string SPMessage)
+        {
+ 		    //to do..      
+        }
+
+        /// <summary>
+        /// 容器中网格或下拉列表选中某行时的触发事件
+        /// </summary>
+        /// <param name="ParameterName">对象参数名</param>
+        /// <param name="CellA">选中行第一列的值</param>
+        /// <param name="CellB">选中行第二列的值</param>
+	    public void RowSelected(string ParameterName, string CellA, string CellB)
+        { 
+		    //to do..        	
+        }
+
+		/// <summary>
+		/// 容器中可输入控件获取光标焦点后触发的事件
+		/// </summary>
+		/// <param name="ParameterName">对象参数名</param>
+		public void ParameterEnter(string ParameterName)
+		{
+			//to do..   
+		}
+
+        /// <summary>
+        /// 容器中可输入控件按回车后触发的事件
+        /// </summary>
+        /// <param name="ParameterName">对象参数名</param>
+        /// <param name="ParameterValue">输入值</param>
+        /// <returns>True跳到下一个控件，False表示留在原控件中</returns>
+        public bool EnterPressed(string ParameterName, string ParameterValue)
+        {
+            //to do..
+            return true;
+        }
+
+	
+		/// <summary>
+		/// 批号扫描成功后触发的事件
+		/// </summary>
+		public void LotSNScanned(string LotSN)
+		{
+			//to do..
+		}
+
+		/// <summary>
+		/// 动态事务批号传送前触发的事件
+		/// </summary>
+		/// <returns>True允许执行Move，False终止</returns>
+		public bool LotMoveBefore(string LotId)
+		{
+			//to do..
+			return true;
+		}	
+		
+		/// <summary>
+		/// 动态事务批号传送后触发的事件
+		/// </summary>
+		public void LotMoved(string LotId)
+		{
+			//to do..
+		}
+
+		/// <summary>
+		/// 复位按钮触发的事件
+		/// </summary>
+		public void LotReset()
+		{
+			//to do..
+		}			
+       
+    }
+}

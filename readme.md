@@ -19,6 +19,31 @@
 
 - `stocktake-inventory-update/` — 库存盘点更新
 - `api-tester/` — 接口测试工具
+- `finished-mo-semifinished-lot-allocation/` — 成品工单半成品批次预分配
+- `finished-ink-allocation-picking/` — 成品灌墨指定批次与完工领料
+
+### 半成品批次分配（MOSemiFinishedLotAllocationDoMethod）
+
+| `@I_Sender` | 说明 |
+|---|---|
+| `GetMOProduct` | 查工单半成品需求/已分配/未分配 |
+| `GetInventory` | 查可分配批次库存（按 `EntryDate` 排序） |
+| `GetAllocatedLots` | 查已分配批次 |
+| `AssignLot` | 扫 `LotSN` 单批分配 |
+| `AutoAssign` | 按入库时间 FIFO 自动填满剩余需求（入参 `@MOItemId`） |
+| `DeleteLot` | 逻辑删除分配记录 |
+
+`AutoAssign` 规则：库存过滤同 `GetInventory`；按 `EntryDate`、`LotSN` 升序逐批取 `MIN(剩余需求, 批次可用量)`；库存不足时部分分配并返回剩余量。
+
+### 成品灌墨指定批次衔接（PDA_FPInkCheckInput）
+
+完整规格见 `.spec-workflow/specs/finished-ink-allocation-picking/`（requirements / design / tasks）。
+
+- 灌墨扫描以 `MOSemiFinishedLotAllocation` 的有效占用记录作为准入条件，不再要求该批次已生成领料记录。
+- 批次可用量按“当前工单物料和批次的分配数量 - 当前上料会话实际使用数量”计算；使用数量不得超过分配余额或工单物料剩余需求。
+- 批次可用量大于剩余需求时，PDA 先返回建议数量，操作员在 `InputNumberDefocus` 确认后才写入使用记录。
+- 自动完工或批次下线前，仅为当前上料会话的未领料记录生成生产领料单；过站报工成功后，将实际使用批次的分配记录设为不再占用已分配数量，历史记录保留。
+- 当前处于 spec 评审阶段，`PDA_FPInkCheckInput.sql` 尚未按新规格改造；spec 确认后再进入 SQL 实现。
 
 ## Web 应用
 

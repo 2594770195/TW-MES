@@ -74,6 +74,18 @@
 - [ ] 剩余需求量或批次可用库存小于等于 `0` 时阻断并返回可理解提示。
 - [ ] 插入记录使用事务，避免重复点击导致超分配。
 
+### F-006 按入库时间 FIFO 自动分配（AutoAssign）
+输入当前工单物料行 `@MOItemId`，按库存 `EntryDate` 先进先出自动填满剩余需求。
+
+验收标准：
+- [ ] 校验工单物料行存在且为半成品。
+- [ ] 库存过滤口径与 `GetInventory` 一致（在库、状态正常、LotSN 唯一、可用量 > 0）。
+- [ ] 按 `EntryDate`、`LotSN` 升序逐批分配。
+- [ ] 每批分配数量 = `MIN(剩余需求量, 批次可用库存)`，循环至需求满足或库存用尽。
+- [ ] 无剩余需求或无可分配库存时阻断并返回提示。
+- [ ] 库存不足时允许部分分配，返回本次分配批次数、分配数量、剩余未分配数量。
+- [ ] 整段写入使用事务。
+
 ### F-005 输入记录 ID 删除分配记录
 输入分配记录表 ID，删除对应分配记录。
 
@@ -90,10 +102,10 @@
 
 | 参数 | 用途 |
 |---|---|
-| `@I_Sender` | 功能分支 |
+| `@I_Sender` | 功能分支：`GetMOProduct` / `GetInventory` / `GetAllocatedLots` / `AssignLot` / `AutoAssign` / `DeleteLot` |
 | `@MOId` | 工单 ID |
 | `@MOName` | 工单号 |
-| `@MOItemId` | 工单物料行 ID |
+| `@MOItemId` | 工单物料行 ID（`AutoAssign` 必填） |
 | `@ProductId` | 半成品物料 ID |
 | `@LotSN` | 库存批次号 |
 | `@MOSemiFinishedLotAllocationId` | 分配记录 ID |
@@ -121,3 +133,26 @@
 - 防止影响正式库存：不修改库存数量和库存状态，只维护预分配台账。
 - 防止字段猜测：实现前必须以 `MES/table/` 表结构为准。
 - 防止旧流程冲突：`MOProductionLot` 已存在或被历史流程引用，本期改用 `MOSemiFinishedLotAllocation` 作为独立预分配记录表。
+
+---
+
+## 6. PDA 成品灌墨消费规则
+
+### F-007 扫描指定批次
+- 成品灌墨扫描半成品批次时，不再以 `PickingListItemLot` 是否已领料作为准入条件。
+- 扫描批次必须存在当前工单、工单物料、批次号一致，且 `DeleteFlag='0' AND IsOccupyAllocatedQty=1` 的预分配记录。
+- 当前批次可用数量 = 当前工单物料和批次的占用分配数量 - 当前 `LoadingItemLot` 已使用数量。
+- 实际使用数量不得超过当前批次可用数量，也不得超过当前工单物料的剩余需求。
+
+### F-008 扫描数量确认
+- 当扫描批次可用数量大于当前工单物料剩余需求时，扫描事件仅返回剩余需求数量，不写入上料、投料和数据链记录。
+- PDA 在 `InputNumberDefocus` 事件确认数量；确认数量合法后才写入 `LoadingItemLotRecord`、投料明细和数据链。
+- 当批次可用数量小于或等于剩余需求时，沿用现有扫描即按可用数量写入的行为。
+
+### F-009 完工领料与预分配释放
+- 自动完工和手工批次下线前，按当前 `LoadingItemLot` 中 `IsPicking=0` 的实际使用记录生成生产领料单。
+- 领料单生成范围仅限当前上料会话，不处理其他会话的未领料记录。
+- 完工、过站和报工成功后，将当前会话实际使用批次对应的有效预分配记录更新为 `IsOccupyAllocatedQty=0`，并更新 `ModifyDate`。
+- 释放预分配保留历史记录，不逻辑删除；未实际使用的预分配记录继续占用数量。
+
+> PDA 灌墨消费的完整需求、设计与任务见独立规格：`.spec-workflow/specs/finished-ink-allocation-picking/`。

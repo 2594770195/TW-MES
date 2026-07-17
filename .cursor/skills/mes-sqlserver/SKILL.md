@@ -102,6 +102,12 @@ CREATE TABLE #WarehouseList ( ... );
 - 失败时设置 `@I_ReturnMessage` 并 `RETURN -1`（OrBit 风格）或 `RAISERROR`/`THROW`（批处理脚本）。
 - 不向前端或调用方暴露内部堆栈；错误信息应可理解、可定位。
 
+### 锁定策略
+
+- 所有 SQL 操作默认**不添加锁提示**，包括 `UPDLOCK`、`HOLDLOCK`、`XLOCK`、`ROWLOCK`、`TABLOCK` 等。
+- 只有确认不加锁会带来重大数据风险（如超分配、重复扣减、数据损坏）时，先向用户说明风险、锁范围与并发影响，获得明确同意后才可增加锁提示或提升隔离级别。
+- 未获用户明确同意时，不得以“防并发”为由自行添加锁提示。
+
 ### @I_ReturnMessage 错误提示规范
 
 OrBit Save/DoMethod 类过程的业务校验失败时，**必须**设置 `@I_ReturnMessage` 并以 `ServerMessage:` 前缀返回；涉及**具体输入参数**的异常，**必须**在提示中拼接该参数的实际值，便于前端/操作员定位问题。
@@ -143,6 +149,26 @@ SET @I_ReturnMessage = 'ServerMessage:[领料单号][' + @PickingListName + ']�
 - 新增表时必须使用 `sys.sp_addextendedproperty @name=N'MS_Description'` 写入表说明和每个字段说明，确保 SQL Server 表设计器的“说明”字段可见。
 - 历史表不需要修改，仅为备份
 
+## 常见业务规则
+
+### WW_RMInventory 库存表
+
+- `IsStorage=1` 表示**在库**；`IsStorage=0` 表示已出库/不在库。
+- 查询、匹配、分配、校验可用库存时，**默认必须加** `IsStorage=1`（可再配合 `Qty>0` 等条件）。
+- 仅在明确需要包含已出库记录的场景（如盘点冲销、历史追溯、专门把批次置为不在库）才可省略或使用 `IsStorage=0`。
+
+```sql
+-- ✅ 推荐：查可用在库库存
+SELECT ...
+FROM dbo.WW_RMInventory
+WHERE ... AND IsStorage = 1 AND Qty > 0
+
+-- ❌ 易错：漏加 IsStorage，会把已出库批次算进可用量
+SELECT ...
+FROM dbo.WW_RMInventory
+WHERE ...
+```
+
 ## 常见业务模块前缀
 
 | 前缀 | 典型用途 |
@@ -162,7 +188,7 @@ SET @I_ReturnMessage = 'ServerMessage:[领料单号][' + @PickingListName + ']�
 2. **查参考** — 在 `MES/procedure/` 找同类过程作模板。
 3. **读 spec** — 有规格文档则严格按 requirements/design 实现。
 4. **写脚本** — 遵循本节规范，分段中文注释。
-5. **自检** — 字段名、主键类型、事务范围、参数化、错误返回（参数异常时 `@I_ReturnMessage` 是否带出具体参数值）、临时表注释是否说明用途；新增表是否已写入表级和字段级 `MS_Description` 说明。
+5. **自检** — 字段名、主键类型、事务范围、参数化、错误返回（参数异常时 `@I_ReturnMessage` 是否带出具体参数值）、临时表注释是否说明用途；新增表是否已写入表级和字段级 `MS_Description` 说明；涉及 `WW_RMInventory` 时是否已按需加 `IsStorage=1`。
 
 ## 输出要求
 

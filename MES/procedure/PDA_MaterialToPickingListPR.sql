@@ -1,3 +1,7 @@
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
 -- =============================================
 -- Author:		<OrBit Team Administrator>
 -- Create Date: <2019.04.15>
@@ -978,5 +982,4 @@ IF not EXISTS(SELECT 1 FROM PickingListItem A INNER JOIN MOItem B ON A.MOItemId=
 	RETURN 0
 
 END
-go
-
+GO

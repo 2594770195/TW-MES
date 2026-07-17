@@ -1,17 +1,22 @@
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
 -- =============================================
 -- Author:		<OrBit Team>
 -- Create date: <2026-07-07>
 -- Description:	成品工单半成品批次分配 DoMethod
--- Revision: 1.01
+-- Revision: 1.02
 -- @I_Sender 分支说明：
 --   GetMOProduct     查询工单半成品需求、已分配数量、剩余数量
 --   GetInventory     查询半成品可分配批次库存
 --   GetAllocatedLots 查询当前工单已分配批次
 --   AssignLot        输入 LotSN 自动分配批次
+--   AutoAssign       按入库时间 EntryDate 先进先出，自动分配剩余需求
 --   DeleteLot        按分配记录 ID 逻辑删除
 -- 错误返回：失败时设置 @I_ReturnMessage='ServerMessage:...' 并 RETURN -1
 -- =============================================
-CREATE PROCEDURE [dbo].[MOSemiFinishedLotAllocationDoMethod]
+ALTER PROCEDURE [dbo].[MOSemiFinishedLotAllocationDoMethod]
 @I_Sender nvarchar(200) = '',					-- 功能分支
 @I_ReturnMessage nvarchar(max) = '' OUTPUT,		-- 返回的信息,支持多语言
 @I_ExceptionFieldName nvarchar(100) = '' OUTPUT,-- 向客户端报告引起冲突的字段
@@ -25,11 +30,9 @@ CREATE PROCEDURE [dbo].[MOSemiFinishedLotAllocationDoMethod]
 @I_ParentPKId char(12) = '',					-- 父级主键
 @I_Parameter nvarchar(100) = '',				-- 插件参数
 -- 以上变量为系统服务固定接口参数，必须在每一个 DoMethod 过程中实现.
-@MOId char(12) = '',							-- 成品工单ID
 @MOName nvarchar(50) = '',						-- 成品工单号
 @MOItemId char(12) = '',						-- 工单半成品物料行ID
-@ProductId char(12) = '',						-- 半成品物料ID
-@LotSN nvarchar(100) = '',						-- MES批次号
+@BoxOrLotSN nvarchar(100) = '',						-- MES批次号
 @MOSemiFinishedLotAllocationId char(12) = ''	-- 半成品批次分配记录ID
 AS
 BEGIN
@@ -40,8 +43,6 @@ BEGIN
 	SET @I_ReturnMessage = ''
 	SET @I_ExceptionFieldName = ''
 
-	DECLARE @ResolvedMOId char(12) = ''              -- GetMOProduct / GetAllocatedLots 解析后的工单 ID
-	DECLARE @ResolvedMOName nvarchar(50) = ''          -- GetMOProduct / GetAllocatedLots 解析后的工单号
 	DECLARE @AssignMOId char(12) = ''                  -- AssignLot 工单 ID
 	DECLARE @AssignMOName nvarchar(50) = ''            -- AssignLot 工单号快照
 	DECLARE @AssignProductId char(12) = ''             -- AssignLot 半成品物料 ID
@@ -59,15 +60,21 @@ BEGIN
 	DECLARE @AssignQty decimal(18, 8) = 0              -- AssignLot 本次实际分配数量
 	DECLARE @InventoryRowCount int = 0                 -- AssignLot 库存表 LotSN 行数校验
 	DECLARE @NewMOSemiFinishedLotAllocationId char(12) = '' -- AssignLot 新分配记录 ID
+	DECLARE @AutoAssignRowId int = 0                   -- AutoAssign 当前处理行号
+	DECLARE @AutoAssignRowCount int = 0                -- AutoAssign 可分配批次行数
+	DECLARE @AutoAssignLotCount int = 0                -- AutoAssign 本次实际写入批次数
+	DECLARE @AutoAssignTotalQty decimal(18, 8) = 0     -- AutoAssign 本次实际分配总数量
+	DECLARE @AutoAssignLotSN nvarchar(100) = ''        -- AutoAssign 当前批次号
+
+    DECLARE @MOId NVARCHAR(20)=''
+    DECLARE @ProductId NVARCHAR(20)=''
+    insert into mwjtestlog(src,log1,log2) VALUES(@I_Sender,@MOName+@MOItemId,@BoxOrLotSN)
 
 	-- 【查询】查询工单半成品需求，返回需求、已分配和剩余数量
 	IF @I_Sender = 'GetMOProduct'
 	BEGIN
-		SET @ResolvedMOId = ''
-		SET @ResolvedMOName = ''
-
 		-- 【校验】工单 ID 与工单号不能同时为空
-		IF ISNULL(@MOId, '') = '' AND ISNULL(@MOName, '') = ''
+		IF  ISNULL(@MOName, '') = ''
 		BEGIN
 			SET @I_ReturnMessage = N'ServerMessage:请选择有效工单!'
 			RETURN -1
@@ -75,14 +82,12 @@ BEGIN
 
 		-- 【准备】按工单 ID 优先解析工单，未传 ID 时按工单号解析
 		SELECT TOP 1
-			@ResolvedMOId = mo.MOId,
-			@ResolvedMOName = mo.MOName
+			@MOId = mo.MOId
 		FROM dbo.MO mo
-		WHERE (ISNULL(@MOId, '') <> '' AND mo.MOId = @MOId)
-			OR (ISNULL(@MOId, '') = '' AND ISNULL(@MOName, '') <> '' AND mo.MOName = @MOName)
+		WHERE  mo.MOName = @MOName and MOName like '2%'
 
 		-- 【校验】解析不到有效工单时返回业务提示
-		IF ISNULL(@ResolvedMOId, '') = ''
+		IF ISNULL(@MOId, '') = ''
 		BEGIN
 			SET @I_ReturnMessage = N'ServerMessage:请选择有效工单!'
 			RETURN -1
@@ -90,17 +95,18 @@ BEGIN
 
 		-- 【查询】汇总当前工单半成品物料需求和占用中的预分配数量
 		SELECT
-			mo.MOId,
-			mo.MOName,
+            mo.MOId,
 			mi.MOItemId,
+			mo.MOName,
+            mi.LineSequence,
 			mi.ProductId,
 			pr.ProductName,
 			p.ProductDescription,
 			mi.UOMId,
-			CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0)) AS RequiredQty,
-			CONVERT(decimal(18, 8), ISNULL(alloc.AllocatedQty, 0)) AS AllocatedQty,
-			CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0) - ISNULL(alloc.AllocatedQty, 0)) AS RemainQty,
-			mi.LineSequence
+			CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0)) AS ItemQtyRequired,
+			CONVERT(decimal(18, 8), ISNULL(alloc.AllocatedQty, 0)) AS 已分配数量,
+			CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0) - ISNULL(alloc.AllocatedQty, 0)) AS 未分配数量
+			
 		FROM dbo.MOItem mi
 		INNER JOIN dbo.MO mo ON mo.MOId = mi.MOId
 		INNER JOIN dbo.Product p ON p.ProductId = mi.ProductId
@@ -119,12 +125,13 @@ BEGIN
 		) alloc ON alloc.MOId = mi.MOId
 			AND alloc.MOItemId = mi.MOItemId
 			AND alloc.ProductId = mi.ProductId
-		WHERE mi.MOId = @ResolvedMOId
-			AND ISNULL(mi.DeleteFlag, '') = ''
+	    WHERE mi.MOId = @MOId 
+        --测试
+        -- WHERE (mi.MOId = @MOId or moname='2000018728' )
+			AND ISNULL(mi.DeleteFlag, '') = '0'
 			AND mi.LineSequence <> '000'
 			AND p.ProductClassify = '2'
 		ORDER BY mi.LineSequence, pr.ProductName
-
 		RETURN 0
 	END
 
@@ -132,11 +139,12 @@ BEGIN
 	IF @I_Sender = 'GetInventory'
 	BEGIN
 		-- 【校验】物料 ID 不能为空
-		IF ISNULL(@ProductId, '') = ''
+		IF ISNULL(@MOItemId, '') = ''
 		BEGIN
-			SET @I_ReturnMessage = N'ServerMessage:请选择有效半成品物料!'
+			SET @I_ReturnMessage = N'ServerMessage:请选择有效半成品行!'
 			RETURN -1
 		END
+        select @ProductId=productid from MOItem where MOItemId=@MOItemId
 
 		-- 【查询】读取正常在库批次；LotSN 唯一性仅约束库存表，分配表按 LotSN 汇总占用数量
 		SELECT
@@ -146,16 +154,11 @@ BEGIN
 			p.ProductDescription,
 			wri.LotSN,
 			wri.ProductionLotNO,
-			wri.FactoryId,
 			f.FactoryName,
-			wri.WorkcenterId,
 			w.WorkcenterName,
-			wri.CellId,
-			c.CellName,
-			wri.UOMId,
-			CONVERT(decimal(18, 8), ISNULL(wri.Qty, 0)) AS StockQty,
-			CONVERT(decimal(18, 8), ISNULL(alloc.AllocatedQty, 0)) AS AllocatedQty,
-			CONVERT(decimal(18, 8), ISNULL(wri.Qty, 0) - ISNULL(alloc.AllocatedQty, 0)) AS AvailableQty,
+            CONVERT(decimal(18, 8), ISNULL(wri.Qty, 0) - ISNULL(alloc.AllocatedQty, 0)) AS 可分配数量,
+			CONVERT(decimal(18, 8), ISNULL(wri.Qty, 0)) AS 批次数量,
+			CONVERT(decimal(18, 8), ISNULL(alloc.AllocatedQty, 0)) AS 已分配数量,
 			wri.ProductionDate,
 			wri.ValidityEndDate,
 			wri.EntryDate
@@ -198,60 +201,30 @@ BEGIN
 	-- 【查询】查询当前工单已分配的有效批次记录
 	IF @I_Sender = 'GetAllocatedLots'
 	BEGIN
-		SET @ResolvedMOId = ''
-		SET @ResolvedMOName = ''
-
-		-- 【校验】工单 ID 与工单号不能同时为空
-		IF ISNULL(@MOId, '') = '' AND ISNULL(@MOName, '') = ''
+		IF ISNULL(@MOItemId, '') = ''
 		BEGIN
-			SET @I_ReturnMessage = N'ServerMessage:请选择有效工单!'
-			RETURN -1
-		END
-
-		-- 【准备】按工单 ID 优先解析工单，未传 ID 时按工单号解析
-		SELECT TOP 1
-			@ResolvedMOId = mo.MOId,
-			@ResolvedMOName = mo.MOName
-		FROM dbo.MO mo
-		WHERE (ISNULL(@MOId, '') <> '' AND mo.MOId = @MOId)
-			OR (ISNULL(@MOId, '') = '' AND ISNULL(@MOName, '') <> '' AND mo.MOName = @MOName)
-
-		-- 【校验】解析不到有效工单时返回业务提示
-		IF ISNULL(@ResolvedMOId, '') = ''
-		BEGIN
-			SET @I_ReturnMessage = N'ServerMessage:请选择有效工单!'
+			SET @I_ReturnMessage = N'ServerMessage:请选择有效行!'
 			RETURN -1
 		END
 
 		-- 【查询】返回当前工单有效分配记录及物料、库存位置信息
 		SELECT
 			a.MOSemiFinishedLotAllocationId,
-			a.MOId,
-			a.MOName,
-			a.MOItemId,
-			a.ProductId,
-			pr.ProductName,
-			p.ProductDescription,
-			a.WWId,
-			a.LotSN,
-			a.ProductionLotNO,
-			a.FactoryId,
+			-- pr.ProductName,
+			-- p.ProductDescription,
 			f.FactoryName,
-			a.WorkcenterId,
 			w.WorkcenterName,
-			a.CellId,
-			c.CellName,
-			a.UOMId,
+            a.LotSN,
+			a.ProductionLotNO,
+			-- c.CellName,
 			u.UOMName,
 			CONVERT(decimal(18, 8), ISNULL(a.Qty, 0)) AS Qty,
-			a.IsOccupyAllocatedQty,
-			a.CreateUserId,
-			a.CreateUserName,
 			a.CreateDate,
-			a.ModifyDate,
 			CONVERT(decimal(18, 8), ISNULL(wri.Qty, 0)) AS StockQty,
-			wri.LotStatus,
-			wri.IsStorage
+			LotStatusTable.UserCodeDescription AS LotStatus,
+            wri.ProductionDate,
+			wri.ValidityEndDate,
+			wri.EntryDate
 		FROM dbo.MOSemiFinishedLotAllocation a
 		INNER JOIN dbo.Product p ON p.ProductId = a.ProductId
 		LEFT JOIN dbo.ProductRoot pr ON pr.ProductRootId = p.ProductRootId
@@ -260,9 +233,10 @@ BEGIN
 		LEFT JOIN dbo.Cell c ON c.CellId = a.CellId
 		LEFT JOIN dbo.UOM u ON u.UOMId = a.UOMId
 		LEFT JOIN dbo.WW_RMInventory wri ON wri.WWId = a.WWId
-		WHERE a.MOId = @ResolvedMOId
+        LEFT JOIN UserCode_Table('URC100000AA9') LotStatusTable ON wri.LotStatus=LotStatusTable.UserCodeName
+		WHERE a.MOitemId = @MOItemId
 			-- 【过滤】只返回有效分配记录
-			AND a.DeleteFlag = '0'
+			AND a.DeleteFlag = '0' and wri.IsStorage=1
 		ORDER BY a.CreateDate DESC, a.LotSN
 
 		RETURN 0
@@ -271,25 +245,7 @@ BEGIN
 	-- 【写入】输入 LotSN 自动分配批次给工单物料行
 	IF @I_Sender = 'AssignLot'
 	BEGIN
-		-- 【初始化】清空 AssignLot 工作变量，避免复用旧值
-		SET @AssignMOId = ''
-		SET @AssignMOName = ''
-		SET @AssignProductId = ''
-		SET @AssignUOMId = ''
-		SET @AssignWWId = ''
-		SET @AssignProductionLotNO = ''
-		SET @AssignFactoryId = ''
-		SET @AssignWorkcenterId = ''
-		SET @AssignCellId = ''
-		SET @RequiredQty = 0
-		SET @RemainQty = 0
-		SET @StockQty = 0
-		SET @LotAllocatedQty = 0
-		SET @AvailableQty = 0
-		SET @AssignQty = 0
-		SET @InventoryRowCount = 0
-		SET @NewMOSemiFinishedLotAllocationId = ''
-
+		
 		-- 【校验】工单物料行与批次号不能为空
 		IF ISNULL(@MOItemId, '') = ''
 		BEGIN
@@ -297,7 +253,7 @@ BEGIN
 			RETURN -1
 		END
 
-		IF ISNULL(@LotSN, '') = ''
+		IF ISNULL(@BoxOrLotSN, '') = ''
 		BEGIN
 			SET @I_ReturnMessage = N'ServerMessage:批次不存在或不可分配!'
 			RETURN -1
@@ -314,7 +270,7 @@ BEGIN
 		INNER JOIN dbo.MO mo ON mo.MOId = mi.MOId
 		INNER JOIN dbo.Product p ON p.ProductId = mi.ProductId
 		WHERE mi.MOItemId = @MOItemId
-			AND ISNULL(mi.DeleteFlag, '') = ''
+			AND ISNULL(mi.DeleteFlag, '') = '0'
 			AND mi.LineSequence <> '000'
 			AND p.ProductClassify = '2'
 
@@ -327,7 +283,7 @@ BEGIN
 		-- 【校验】库存表 LotSN 必须唯一，且批次需正常在库
 		SELECT @InventoryRowCount = COUNT(1)
 		FROM dbo.WW_RMInventory
-		WHERE LotSN = @LotSN
+		WHERE LotSN = @BoxOrLotSN
 
 		IF @InventoryRowCount <> 1
 		BEGIN
@@ -343,7 +299,7 @@ BEGIN
 			@AssignWorkcenterId = wri.WorkcenterId,
 			@AssignCellId = wri.CellId
 		FROM dbo.WW_RMInventory wri
-		WHERE wri.LotSN = @LotSN
+		WHERE wri.LotSN = @BoxOrLotSN
 			AND wri.LotStatus = '1'
 			AND wri.IsStorage = 1
 			AND ISNULL(wri.Qty, 0) > 0
@@ -371,12 +327,12 @@ BEGIN
 
 		-- 【计算】事务内重新计算工单物料剩余需求
 		SELECT @RemainQty = CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0) - ISNULL(alloc.AllocatedQty, 0))
-		FROM dbo.MOItem mi WITH (UPDLOCK, HOLDLOCK)
+		FROM dbo.MOItem mi 
 		LEFT JOIN (
 			SELECT
 				MOItemId,
 				SUM(ISNULL(Qty, 0)) AS AllocatedQty
-			FROM dbo.MOSemiFinishedLotAllocation WITH (UPDLOCK, HOLDLOCK)
+			FROM dbo.MOSemiFinishedLotAllocation 
 			WHERE MOId = @AssignMOId
 				AND MOItemId = @MOItemId
 				AND ProductId = @AssignProductId
@@ -385,7 +341,7 @@ BEGIN
 			GROUP BY MOItemId
 		) alloc ON alloc.MOItemId = mi.MOItemId
 		WHERE mi.MOItemId = @MOItemId
-			AND ISNULL(mi.DeleteFlag, '') = ''
+			AND ISNULL(mi.DeleteFlag, '') = '0'
 			AND mi.LineSequence <> '000'
 
 		IF ISNULL(@RemainQty, 0) <= 0
@@ -397,7 +353,7 @@ BEGIN
 
 		-- 【计算】事务内重新计算批次可用库存
 		SELECT @StockQty = CONVERT(decimal(18, 8), ISNULL(wri.Qty, 0))
-		FROM dbo.WW_RMInventory wri WITH (UPDLOCK, HOLDLOCK)
+		FROM dbo.WW_RMInventory wri
 		WHERE wri.WWId = @AssignWWId
 			AND wri.LotStatus = '1'
 			AND wri.IsStorage = 1
@@ -411,8 +367,8 @@ BEGIN
 		END
 
 		SELECT @LotAllocatedQty = CONVERT(decimal(18, 8), ISNULL(SUM(ISNULL(Qty, 0)), 0))
-		FROM dbo.MOSemiFinishedLotAllocation WITH (UPDLOCK, HOLDLOCK)
-		WHERE LotSN = @LotSN
+		FROM dbo.MOSemiFinishedLotAllocation 
+		WHERE LotSN = @BoxOrLotSN
 			AND DeleteFlag = '0'
 			AND IsOccupyAllocatedQty = 1
 
@@ -476,7 +432,7 @@ BEGIN
 			@MOItemId,
 			@AssignProductId,
 			@AssignWWId,
-			@LotSN,
+			@BoxOrLotSN,
 			@AssignProductionLotNO,
 			@AssignFactoryId,
 			@AssignWorkcenterId,
@@ -500,41 +456,237 @@ BEGIN
 
 		-- 【提交】分配写入成功
 		COMMIT TRANSACTION AssignLot
+        select '' AS BoxOrLotSN
 
-		-- 【返回】返回新插入的分配记录
+		RETURN 0
+	END
+
+	-- 【写入】按入库时间 EntryDate 先进先出，自动分配工单物料剩余需求
+	IF @I_Sender = 'AutoAssign'
+	BEGIN
+		-- 【校验】工单物料行不能为空
+		IF ISNULL(@MOItemId, '') = ''
+		BEGIN
+			SET @I_ReturnMessage = N'ServerMessage:请选择有效半成品物料行!'
+			RETURN -1
+		END
+
+		-- 【校验】工单物料行必须存在、未删除且为半成品
 		SELECT
-			a.MOSemiFinishedLotAllocationId,
-			a.MOId,
-			a.MOName,
-			a.MOItemId,
-			a.ProductId,
-			pr.ProductName,
-			p.ProductDescription,
-			a.WWId,
-			a.LotSN,
-			a.ProductionLotNO,
-			a.FactoryId,
-			f.FactoryName,
-			a.WorkcenterId,
-			w.WorkcenterName,
-			a.CellId,
-			c.CellName,
-			a.UOMId,
-			u.UOMName,
-			CONVERT(decimal(18, 8), ISNULL(a.Qty, 0)) AS Qty,
-			a.IsOccupyAllocatedQty,
-			a.CreateUserId,
-			a.CreateUserName,
-			a.CreateDate,
-			a.ModifyDate
-		FROM dbo.MOSemiFinishedLotAllocation a
-		INNER JOIN dbo.Product p ON p.ProductId = a.ProductId
-		LEFT JOIN dbo.ProductRoot pr ON pr.ProductRootId = p.ProductRootId
-		LEFT JOIN dbo.Factory f ON f.FactoryId = a.FactoryId
-		LEFT JOIN dbo.Workcenter w ON w.WorkcenterId = a.WorkcenterId
-		LEFT JOIN dbo.Cell c ON c.CellId = a.CellId
-		LEFT JOIN dbo.UOM u ON u.UOMId = a.UOMId
-		WHERE a.MOSemiFinishedLotAllocationId = @NewMOSemiFinishedLotAllocationId
+			@AssignMOId = mi.MOId,
+			@AssignMOName = mo.MOName,
+			@AssignProductId = mi.ProductId,
+			@AssignUOMId = mi.UOMId,
+			@RequiredQty = CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0))
+		FROM dbo.MOItem mi
+		INNER JOIN dbo.MO mo ON mo.MOId = mi.MOId
+		INNER JOIN dbo.Product p ON p.ProductId = mi.ProductId
+		WHERE mi.MOItemId = @MOItemId
+			AND ISNULL(mi.DeleteFlag, '') = '0'
+			AND mi.LineSequence <> '000'
+			AND p.ProductClassify = '2'
+
+		IF ISNULL(@AssignMOId, '') = ''
+		BEGIN
+			SET @I_ReturnMessage = N'ServerMessage:请选择有效半成品物料行!'
+			RETURN -1
+		END
+
+		-- 【事务】开启自动分配事务，保证本次多批次写入的原子性
+		BEGIN TRANSACTION AutoAssign
+
+		-- 【计算】事务内重新计算工单物料剩余需求
+		SELECT @RemainQty = CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0) - ISNULL(alloc.AllocatedQty, 0))
+		FROM dbo.MOItem mi
+		LEFT JOIN (
+			SELECT
+				MOItemId,
+				SUM(ISNULL(Qty, 0)) AS AllocatedQty
+			FROM dbo.MOSemiFinishedLotAllocation
+			WHERE MOId = @AssignMOId
+				AND MOItemId = @MOItemId
+				AND ProductId = @AssignProductId
+				AND DeleteFlag = '0'
+				AND IsOccupyAllocatedQty = 1
+			GROUP BY MOItemId
+		) alloc ON alloc.MOItemId = mi.MOItemId
+		WHERE mi.MOItemId = @MOItemId
+			AND ISNULL(mi.DeleteFlag, '') = '0'
+			AND mi.LineSequence <> '000'
+
+		IF ISNULL(@RemainQty, 0) <= 0
+		BEGIN
+			ROLLBACK TRANSACTION AutoAssign
+			SET @I_ReturnMessage = N'ServerMessage:当前物料已无剩余需求数量!'
+			RETURN -1
+		END
+
+		-- 【准备】#AutoAssignLots：按入库时间 FIFO 排列的可分配批次，供循环写入分配记录
+		-- 口径与 GetInventory 一致：正常在库、LotSN 唯一、可用数量 > 0
+		SELECT
+			ROW_NUMBER() OVER (ORDER BY wri.EntryDate, wri.LotSN) AS RowId,
+			wri.WWId,
+			wri.LotSN,
+			wri.ProductionLotNO,
+			wri.FactoryId,
+			wri.WorkcenterId,
+			wri.CellId,
+			CONVERT(decimal(18, 8), ISNULL(wri.Qty, 0) - ISNULL(alloc.AllocatedQty, 0)) AS AvailableQty
+		INTO #AutoAssignLots
+		FROM dbo.WW_RMInventory wri
+		LEFT JOIN (
+			SELECT
+				a.LotSN,
+				SUM(ISNULL(a.Qty, 0)) AS AllocatedQty
+			FROM dbo.MOSemiFinishedLotAllocation a
+			WHERE a.DeleteFlag = '0'
+				AND a.IsOccupyAllocatedQty = 1
+				AND ISNULL(a.LotSN, '') <> ''
+			GROUP BY a.LotSN
+		) alloc ON alloc.LotSN = wri.LotSN
+		WHERE wri.ProductId = @AssignProductId
+			AND wri.LotStatus = '1'
+			AND wri.IsStorage = 1
+			AND ISNULL(wri.Qty, 0) > 0
+			AND ISNULL(wri.LotSN, '') <> ''
+			AND (
+				SELECT COUNT(1)
+				FROM dbo.WW_RMInventory wriCnt
+				WHERE wriCnt.LotSN = wri.LotSN
+			) = 1
+			AND ISNULL(wri.Qty, 0) - ISNULL(alloc.AllocatedQty, 0) > 0
+
+		SELECT @AutoAssignRowCount = COUNT(1) FROM #AutoAssignLots
+
+		IF ISNULL(@AutoAssignRowCount, 0) <= 0
+		BEGIN
+			ROLLBACK TRANSACTION AutoAssign
+			IF OBJECT_ID('tempdb..#AutoAssignLots') IS NOT NULL
+				DROP TABLE #AutoAssignLots
+			SET @I_ReturnMessage = N'ServerMessage:无可分配库存，无法自动分配!'
+			RETURN -1
+		END
+
+		-- 【循环】按 EntryDate 先进先出逐批分配，直到剩余需求为 0 或批次用尽
+		SET @AutoAssignRowId = 1
+		SET @AutoAssignLotCount = 0
+		SET @AutoAssignTotalQty = 0
+
+		WHILE @AutoAssignRowId <= @AutoAssignRowCount AND ISNULL(@RemainQty, 0) > 0
+		BEGIN
+			SELECT
+				@AssignWWId = WWId,
+				@AutoAssignLotSN = LotSN,
+				@AssignProductionLotNO = ProductionLotNO,
+				@AssignFactoryId = FactoryId,
+				@AssignWorkcenterId = WorkcenterId,
+				@AssignCellId = CellId,
+				@AvailableQty = AvailableQty
+			FROM #AutoAssignLots
+			WHERE RowId = @AutoAssignRowId
+
+			SET @AutoAssignRowId = @AutoAssignRowId + 1
+
+			IF ISNULL(@AvailableQty, 0) <= 0
+				CONTINUE
+
+			SET @AssignQty = CASE
+				WHEN @RemainQty < @AvailableQty THEN @RemainQty
+				ELSE @AvailableQty
+			END
+
+			IF ISNULL(@AssignQty, 0) <= 0
+				CONTINUE
+
+			-- 【写入】生成主键并插入预分配记录
+			EXEC dbo.SysGetObjectPKId '', 'MOSemiFinishedLotAllocation', @NewMOSemiFinishedLotAllocationId OUTPUT
+
+			IF ISNULL(@NewMOSemiFinishedLotAllocationId, '') = ''
+			BEGIN
+				ROLLBACK TRANSACTION AutoAssign
+				IF OBJECT_ID('tempdb..#AutoAssignLots') IS NOT NULL
+					DROP TABLE #AutoAssignLots
+				SET @I_ReturnMessage = N'ServerMessage:生成分配记录失败!'
+				RETURN -1
+			END
+
+			INSERT INTO dbo.MOSemiFinishedLotAllocation (
+				MOSemiFinishedLotAllocationId,
+				MOId,
+				MOName,
+				MOItemId,
+				ProductId,
+				WWId,
+				LotSN,
+				ProductionLotNO,
+				FactoryId,
+				WorkcenterId,
+				CellId,
+				UOMId,
+				Qty,
+				IsOccupyAllocatedQty,
+				DeleteFlag,
+				CreateUserId,
+				CreateUserName,
+				CreateDate,
+				ModifyDate
+			)
+			VALUES (
+				@NewMOSemiFinishedLotAllocationId,
+				@AssignMOId,
+				@AssignMOName,
+				@MOItemId,
+				@AssignProductId,
+				@AssignWWId,
+				@AutoAssignLotSN,
+				@AssignProductionLotNO,
+				@AssignFactoryId,
+				@AssignWorkcenterId,
+				@AssignCellId,
+				@AssignUOMId,
+				@AssignQty,
+				1,
+				'0',
+				@I_OrBitUserId,
+				@I_OrBitUserName,
+				GETDATE(),
+				GETDATE()
+			)
+
+			IF @@ROWCOUNT = 0
+			BEGIN
+				ROLLBACK TRANSACTION AutoAssign
+				IF OBJECT_ID('tempdb..#AutoAssignLots') IS NOT NULL
+					DROP TABLE #AutoAssignLots
+				SET @I_ReturnMessage = N'ServerMessage:生成分配记录失败!'
+				RETURN -1
+			END
+
+			SET @RemainQty = @RemainQty - @AssignQty
+			SET @AutoAssignTotalQty = @AutoAssignTotalQty + @AssignQty
+			SET @AutoAssignLotCount = @AutoAssignLotCount + 1
+		END
+
+		IF ISNULL(@AutoAssignLotCount, 0) <= 0 OR ISNULL(@AutoAssignTotalQty, 0) <= 0
+		BEGIN
+			ROLLBACK TRANSACTION AutoAssign
+			IF OBJECT_ID('tempdb..#AutoAssignLots') IS NOT NULL
+				DROP TABLE #AutoAssignLots
+			SET @I_ReturnMessage = N'ServerMessage:无可分配库存，无法自动分配!'
+			RETURN -1
+		END
+
+		-- 【提交】自动分配写入成功；若库存不足则按可分配量部分分配
+		COMMIT TRANSACTION AutoAssign
+
+		IF OBJECT_ID('tempdb..#AutoAssignLots') IS NOT NULL
+			DROP TABLE #AutoAssignLots
+
+		-- 【返回】本次自动分配汇总，便于前端提示
+		SELECT
+			@AutoAssignLotCount AS AssignedLotCount,
+			CONVERT(decimal(18, 8), @AutoAssignTotalQty) AS AssignedQty,
+			CONVERT(decimal(18, 8), ISNULL(@RemainQty, 0)) AS RemainQty
 
 		RETURN 0
 	END
@@ -581,7 +733,7 @@ BEGIN
 
 		-- 【提交】逻辑删除成功
 		COMMIT TRANSACTION DeleteLot
-
+            
 		RETURN 0
 	END
 

@@ -1,0 +1,800 @@
+using System;
+using System.Windows.Forms;
+using System.Text;
+using System.Data;
+using System.Reflection;
+using System.Xml;
+using System.Net;
+using System.Net.Sockets;
+using System.IO;
+using System.Drawing;
+using System.IO.Ports;
+using System.Collections;
+
+/* OrBit-Script脚本
+ * 作    者：
+ * 功能描述：
+ * 版 本 号：
+ * 发布日期:
+ * 最后修改:
+ */
+namespace ScriptProj
+{
+	public class OrBitClass
+	{
+
+		/// <summary>
+		/// MES事务插件接口全局对象，它提供了MES事务对象的所有的接口属性与接口方法
+		/// </summary>
+		public OrBitScript.OrBitAPI Scripter = new OrBitScript.OrBitAPI();
+
+		private Infragistics.Win.UltraWinGrid.UltraGrid MOItemGrid;//检验项
+
+		private Infragistics.Win.UltraWinGrid.UltraGrid MOGrid;//检验项
+
+		/// <summary>
+		/// 脚本对象实例化时加载时的方法
+		/// </summary>
+		public void ScriptLoad()
+		{
+			try
+			{
+				//to do..
+				MOItemGrid = Scripter.MESTxnPanel.Controls["MOGrid"] as Infragistics.Win.UltraWinGrid.UltraGrid;
+				//允许数据变化
+				MOItemGrid.DisplayLayout.Override.AllowUpdate = Infragistics.Win.DefaultableBoolean.True;
+				//行头选择
+
+				MOGrid = Scripter.MESTxnPanel.Controls["MO"] as Infragistics.Win.UltraWinGrid.UltraGrid;
+				//允许数据变化
+				MOGrid.DisplayLayout.Override.AllowUpdate = Infragistics.Win.DefaultableBoolean.True;
+				//行头选择
+				//IPQACheckCItem.DisplayLayout.Override.RowSelectors=Infragistics.Win.DefaultableBoolean.True;
+
+				Scripter.SetParameterValue("RequiredDate", DateTime.Now.ToShortDateString());
+				DataSet ds = new DataSet();
+				DataTable dt = new DataTable();
+				dt.Columns.Add("ProductId", Type.GetType("System.String"));
+				dt.Columns.Add("ProductName", Type.GetType("System.String"));
+				dt.Columns.Add("ProductDescription", Type.GetType("System.String"));
+				dt.Columns.Add("PickingQty", Type.GetType("System.Decimal"));
+				dt.Columns.Add("WarehouseQty", Type.GetType("System.Decimal"));
+				dt.Columns.Add("PLWarehouseQty", Type.GetType("System.Decimal"));
+				dt.Columns.Add("IsMShort", Type.GetType("System.Boolean"));
+				dt.Columns.Add("FromFactoryId", Type.GetType("System.String"));
+				dt.Columns.Add("FromFactoryName", Type.GetType("System.String"));
+				dt.Columns.Add("FromWareHouseId", Type.GetType("System.String"));
+				dt.Columns.Add("FromWareHouseName", Type.GetType("System.String"));
+				dt.Columns.Add("ToFactoryId", Type.GetType("System.String"));
+				dt.Columns.Add("ToFactoryName", Type.GetType("System.String"));
+				dt.Columns.Add("ToWareHouseId", Type.GetType("System.String"));
+				dt.Columns.Add("ToWareHouseName", Type.GetType("System.String"));
+				dt.Columns.Add("IsMergeMO", Type.GetType("System.Boolean"));
+				ds.Tables.Add(dt);
+				Scripter.SetParameterDataSet("MOPickingDetail", ds);
+
+
+				ds = new DataSet();
+				dt = new DataTable();
+				dt.Columns.Add("Check", Type.GetType("System.Boolean"));
+				dt.Columns.Add("MOId", Type.GetType("System.String"));
+				dt.Columns.Add("MOItemId", Type.GetType("System.String"));
+				dt.Columns.Add("MOName", Type.GetType("System.String"));
+				dt.Columns.Add("ProductId", Type.GetType("System.String"));
+				dt.Columns.Add("ProductionLotNO", Type.GetType("System.String"));
+				dt.Columns.Add("IsProduction", Type.GetType("System.Boolean"));
+				dt.Columns.Add("ProductName", Type.GetType("System.String"));
+				dt.Columns.Add("ProductDescription", Type.GetType("System.String"));
+				dt.Columns.Add("ItemQtyRequired", Type.GetType("System.Decimal"));
+				dt.Columns.Add("PickingQty", Type.GetType("System.Decimal"));
+				dt.Columns.Add("PickedQty", Type.GetType("System.Decimal"));
+				dt.Columns.Add("RequestQty", Type.GetType("System.Decimal"));
+				dt.Columns.Add("WarehouseQty", Type.GetType("System.Decimal"));
+				dt.Columns.Add("PLWarehouseQty", Type.GetType("System.Decimal"));
+				dt.Columns.Add("TotalWarehouseQty", Type.GetType("System.Decimal"));
+				dt.Columns.Add("TempFactoryId", Type.GetType("System.String"));
+				dt.Columns.Add("TempWorkcenterId", Type.GetType("System.String"));
+				dt.Columns.Add("TempFactoryName", Type.GetType("System.String"));
+				dt.Columns.Add("TempWorkcenterName", Type.GetType("System.String"));
+				dt.Columns.Add("ToFactoryId", Type.GetType("System.String"));
+				dt.Columns.Add("ToFactoryName", Type.GetType("System.String"));
+				dt.Columns.Add("ToWareHouseId", Type.GetType("System.String"));
+				dt.Columns.Add("ToWareHouseName", Type.GetType("System.String"));
+				ds.Tables.Add(dt);
+				Scripter.SetParameterDataSet("MOGrid", ds);
+
+				ds = new DataSet();
+				dt = new DataTable();
+				dt.Columns.Add("Sel", Type.GetType("System.Boolean"));
+				dt.Columns.Add("ProductDescription", Type.GetType("System.String"));
+				dt.Columns.Add("MOName", Type.GetType("System.String"));
+				dt.Columns.Add("MOQtyRequired", Type.GetType("System.Decimal"));
+
+				ds.Tables.Add(dt);
+				Scripter.SetParameterDataSet("MO", ds);
+
+				Grid_AfterDataLoad_Setting();
+			}
+			catch (Exception ex)
+			{
+				MessageBox.Show(ex.Message, Scripter.PlugInCommand);
+			}
+		}
+
+
+		/// <summary>
+		/// 脚本在退出前的询问方法
+		/// </summary>
+		/// <returns>True则退出，False则取消退出</returns>
+		public bool ScriptClosing()
+		{
+			//to do..
+			return true;
+		}
+
+		/// <summary>
+		/// MES事务对象在关闭时卸载此脚本对象的方法
+		/// </summary>
+		public void ScriptUnLoad()
+		{
+			//to do..
+		}
+
+		/// <summary>
+		/// Winsocket消息接受方法
+		/// </summary>
+		/// <param name="MsgString">消息的内容</param>
+		public void WinsocketMessage(string MsgString)
+		{
+			//to do..  	
+
+		}
+
+		/// <summary>
+		/// MES事务插件Tab页选中时的脚本对象执行的方法
+		/// </summary>
+		public void TabActive()
+		{
+			//to do..
+		}
+
+		/// <summary>
+		/// 容器中按钮触发时的通用检查前置事件
+		/// </summary>
+		/// <param name="ButtonName">按钮名</param>
+		/// <returns>True表示继续,False表示退回</returns>
+		public bool ButtonClickBefore(string ButtonName)
+		{
+			//to do..
+			if (ButtonName == "SubmitPicking")
+			{
+				if (!MOAllotRequestSubmit())
+				{
+					return false;
+				}
+			}
+
+			if (ButtonName == "CreateMOPickingDetail")
+			{
+				string MOName = "";
+				DataSet MOds = Scripter.GetParameterDataSet("MO");
+				for (int i = 0; i < MOds.Tables[0].Rows.Count; i++)
+				{
+					if (bool.Parse(MOds.Tables[0].Rows[i]["Sel"].ToString()))
+					{
+						MOName += MOds.Tables[0].Rows[i]["MOName"].ToString() + ",";
+					}
+				}
+				Scripter.SetParameterValue("MONames", MOName.Trim(','));
+			}
+			return true;
+		}
+
+		/// <summary>
+		/// 容器中按钮通用触发事件
+		/// </summary>
+		/// <param name="ButtonName">按钮名</param>
+		public void ButtonClick(string ButtonName)
+		{
+			//to do..
+			//添加到领料明细
+			if (ButtonName == "AddPickingDetail")
+			{
+				try
+				{
+					DataSet MOds = Scripter.GetParameterDataSet("MOGrid");
+					DataSet ds = Scripter.GetParameterDataSet("MOPickingDetail");
+					ds.Tables[0].Clear();
+
+					//double ProductionQty = 0;
+					//double PickingQty = 0;
+
+					for (int i = 0; i < MOds.Tables[0].Rows.Count; i++)
+					{
+						if (bool.Parse(MOds.Tables[0].Rows[i]["Check"].ToString()))
+						{
+							//if (!bool.Parse(MOds.Tables[0].Rows[i]["IsProduction"].ToString()) && !string.IsNullOrEmpty(MOds.Tables[0].Rows[i]["ProductionLotNO"].ToString()))
+							//{
+							//	MessageBox.Show("工单【" + MOds.Tables[0].Rows[i]["MOName"].ToString() + "】产品【" + MOds.Tables[0].Rows[i]["ProductName"].ToString() + "】已指定生产批次且未生产完成入库的物料不能领料！", Scripter.PlugInCommand);
+							//	return;
+							//}
+
+							//ProductionQty = double.Parse(string.IsNullOrEmpty(MOds.Tables[0].Rows[i]["ProductionQty"].ToString()) ? "0" : MOds.Tables[0].Rows[i]["ProductionQty"].ToString());
+							//PickingQty = double.Parse(string.IsNullOrEmpty(MOds.Tables[0].Rows[i]["PickingQty"].ToString()) ? "0" : MOds.Tables[0].Rows[i]["PickingQty"].ToString());
+
+							//if (!string.IsNullOrEmpty(MOds.Tables[0].Rows[i]["ProductionLotNO"].ToString()) &&
+							//	ProductionQty > PickingQty)
+							//{
+							//	MessageBox.Show("工单【" + MOds.Tables[0].Rows[i]["MOName"].ToString() + "】产品【" + MOds.Tables[0].Rows[i]["ProductName"].ToString() + "】领料数量不能小于预留批次数量！", Scripter.PlugInCommand);
+							//	return;
+							//}
+
+							//							if (decimal.Parse(MOds.Tables[0].Rows[i]["RequestQty"].ToString()) >= decimal.Parse(MOds.Tables[0].Rows[i]["PickingQty"].ToString()))
+							//							{
+							//								MessageBox.Show("工单【" + MOds.Tables[0].Rows[i]["MOName"].ToString() + "】产品【" + MOds.Tables[0].Rows[i]["ProductName"].ToString() + "】已申请数量不能大于要求领料数量！", Scripter.PlugInCommand);
+							//								return;
+							//							}
+							//if (decimal.Parse(MOds.Tables[0].Rows[i]["WarehouseQty"].ToString()) <= 0)
+							//{
+							//	MessageBox.Show("工单【" + MOds.Tables[0].Rows[i]["MOName"].ToString() + "】产品【" + MOds.Tables[0].Rows[i]["ProductName"].ToString() + "】可用库存数量必须大于0！", Scripter.PlugInCommand);
+							//	return;
+							//}
+							if (decimal.Parse(MOds.Tables[0].Rows[i]["PickingQty"].ToString()) <= 0)
+							{
+								MessageBox.Show("工单【" + MOds.Tables[0].Rows[i]["MOName"].ToString() + "】产品【" + MOds.Tables[0].Rows[i]["ProductName"].ToString() + "】领料数量必须大于0！", Scripter.PlugInCommand);
+								return;
+							}
+							bool scan = false;
+							for (int j = 0; j < ds.Tables[0].Rows.Count; j++)
+							{
+								if (MOds.Tables[0].Rows[i]["ProductId"].ToString() == ds.Tables[0].Rows[j]["ProductId"].ToString()
+												&& MOds.Tables[0].Rows[i]["TempFactoryId"].ToString() == ds.Tables[0].Rows[j]["FromFactoryId"].ToString()
+												&& MOds.Tables[0].Rows[i]["TempWorkcenterId"].ToString() == ds.Tables[0].Rows[j]["FromWareHouseId"].ToString()
+												&& MOds.Tables[0].Rows[i]["ToFactoryId"].ToString() == ds.Tables[0].Rows[j]["ToFactoryId"].ToString()
+												&& MOds.Tables[0].Rows[i]["ToWareHouseId"].ToString() == ds.Tables[0].Rows[j]["ToWareHouseId"].ToString())
+								{
+									scan = true;
+									//数量合并
+									ds.Tables[0].Rows[j]["PickingQty"] = decimal.Parse(ds.Tables[0].Rows[j]["PickingQty"].ToString()) + decimal.Parse(MOds.Tables[0].Rows[i]["PickingQty"].ToString());
+									ds.Tables[0].Rows[j]["IsMShort"] = decimal.Parse(ds.Tables[0].Rows[j]["PickingQty"].ToString()) > decimal.Parse(ds.Tables[0].Rows[j]["WarehouseQty"].ToString()) ? true : false;
+									ds.Tables[0].Rows[j]["IsMergeMO"] = true;
+								}
+							}
+							if (!scan)
+							{
+								//添加新行
+								DataRow drItem = ds.Tables[0].NewRow();
+								drItem["ProductId"] = MOds.Tables[0].Rows[i]["ProductId"];
+								drItem["ProductName"] = MOds.Tables[0].Rows[i]["ProductName"];
+								drItem["ProductDescription"] = MOds.Tables[0].Rows[i]["ProductDescription"];
+								drItem["PickingQty"] = decimal.Parse(MOds.Tables[0].Rows[i]["PickingQty"].ToString());
+								drItem["WarehouseQty"] = decimal.Parse(MOds.Tables[0].Rows[i]["WarehouseQty"].ToString());
+								drItem["PLWarehouseQty"] = decimal.Parse(MOds.Tables[0].Rows[i]["PLWarehouseQty"].ToString());
+								drItem["FromFactoryId"] = MOds.Tables[0].Rows[i]["TempFactoryId"].ToString();
+								drItem["FromFactoryName"] = MOds.Tables[0].Rows[i]["TempFactoryName"].ToString();
+								drItem["FromWareHouseId"] = MOds.Tables[0].Rows[i]["TempWorkcenterId"].ToString();
+								drItem["FromWareHouseName"] = MOds.Tables[0].Rows[i]["TempWorkcenterName"].ToString();
+								drItem["ToFactoryId"] = MOds.Tables[0].Rows[i]["ToFactoryId"].ToString();
+								drItem["ToFactoryName"] = MOds.Tables[0].Rows[i]["ToFactoryName"].ToString();
+								drItem["ToWareHouseId"] = MOds.Tables[0].Rows[i]["ToWareHouseId"].ToString();
+								drItem["ToWareHouseName"] = MOds.Tables[0].Rows[i]["ToWareHouseName"].ToString();
+								drItem["IsMergeMO"] = false;
+								drItem["IsMShort"] = decimal.Parse(MOds.Tables[0].Rows[i]["PickingQty"].ToString()) > decimal.Parse(MOds.Tables[0].Rows[i]["WarehouseQty"].ToString()) ? true : false;
+								ds.Tables[0].Rows.Add(drItem);
+							}
+						}
+					}
+				}
+				catch (Exception ex)
+				{
+					MessageBox.Show(ex.Message, Scripter.PlugInCommand);
+				}
+
+			}
+
+			if (ButtonName == "AllCheck")
+			{
+				string CheckStatus = Scripter.GetParameterValue("CheckStatus");
+				DataSet MOds = Scripter.GetParameterDataSet("MOGrid");
+				if (string.IsNullOrEmpty(CheckStatus) || CheckStatus == "0")
+				{
+					for (int i = 0; i < MOds.Tables[0].Rows.Count; i++)
+					{
+						//if (!bool.Parse(MOds.Tables[0].Rows[i]["IsProduction"].ToString()) && !string.IsNullOrEmpty(MOds.Tables[0].Rows[i]["ProductionLotNO"].ToString()))
+						//{
+						//	MOds.Tables[0].Rows[i]["Check"] = false;
+						//}
+						//else if (decimal.Parse(MOds.Tables[0].Rows[i]["WarehouseQty"].ToString()) <= 0 || decimal.Parse(MOds.Tables[0].Rows[i]["PickingQty"].ToString()) <= 0)
+						//{
+						//	MOds.Tables[0].Rows[i]["Check"] = false;
+						//}
+						//else
+						//{
+						//	MOds.Tables[0].Rows[i]["Check"] = true;
+						//}
+
+						MOds.Tables[0].Rows[i]["Check"] = true;
+					}
+					Scripter.SetParameterValue("CheckStatus", "1");
+				}
+				else
+				{
+					for (int i = 0; i < MOds.Tables[0].Rows.Count; i++)
+					{
+						MOds.Tables[0].Rows[i]["Check"] = false;
+					}
+					Scripter.SetParameterValue("CheckStatus", "0");
+				}
+
+			}
+
+			if (ButtonName == "AllCheckMO")
+			{
+				string CheckMOStatus = Scripter.GetParameterValue("CheckMOStatus");
+				DataSet MOds = Scripter.GetParameterDataSet("MO");
+				if (string.IsNullOrEmpty(CheckMOStatus) || CheckMOStatus == "0")
+				{
+					for (int i = 0; i < MOds.Tables[0].Rows.Count; i++)
+					{
+						MOds.Tables[0].Rows[i]["Sel"] = true;
+					}
+					Scripter.SetParameterValue("CheckMOStatus", "1");
+				}
+				else
+				{
+					for (int i = 0; i < MOds.Tables[0].Rows.Count; i++)
+					{
+						MOds.Tables[0].Rows[i]["Sel"] = false;
+					}
+					Scripter.SetParameterValue("CheckMOStatus", "0");
+				}
+
+			}
+
+			if (ButtonName == "SearchAndAdd")
+			{
+				string OrderName = Scripter.GetParameterValue("OrderName");
+
+				string ProductionWhse = Scripter.GetParameterValue("ProductionWhse");
+				if (string.IsNullOrEmpty(ProductionWhse))
+				{
+					MessageBox.Show("请选择生产车间", Scripter.PlugInCommand);
+					Scripter.SetControlFocus("OrderName");
+					return;
+				}
+
+				if (string.IsNullOrEmpty(OrderName))
+				{
+					return;
+				}
+
+				string sql = string.Format(@"declare @p1 nvarchar(max)
+set @p1=NULL
+declare @p2 nvarchar(max)
+set @p2=NULL
+exec Txn_MOPickingRequestDoMethod @I_ReturnMessage=@p1 output,
+@I_ExceptionFieldName=@p2 output,@I_LanguageId=N'2',
+@I_Sender=N'GetMOList',@I_OrBitUserId=N'{0}',
+@I_OrBitUserName=N'{1}',@I_ResourceId=N'{2}',
+@I_ResourceName=N'{3}',@I_PlugInCommand=N'MPRQ',@I_PKId=N'',
+@I_ParentPKId=N'',@I_Parameter=N'[CountMax:100][Count:0]',
+@RequiredDate=NULL,@IsFirstXB=0,@StartDate='2022-02-07 23:59:59',@EndDate=NULL,
+@OrderName=N'{4}',@ProductionWhse=N'{5}'", Scripter.OrBitUserId, Scripter.OrBitUserName, Scripter.ResourceId, Scripter.ResourceName, OrderName, ProductionWhse);
+
+				DataSet AddMODataSet = Scripter.GetSqlDataSet(sql);
+
+				if (AddMODataSet.Tables[0].Rows.Count > 0)
+				{
+					DataSet MOds = Scripter.GetParameterDataSet("MO");
+					for (int i = 0; i < AddMODataSet.Tables[0].Rows.Count; i++)
+					{
+						if (MOds.Tables[0].Select("MOName='" + AddMODataSet.Tables[0].Rows[i]["MOName"].ToString() + "'").Length == 0)
+						{
+							DataRow dr = MOds.Tables[0].NewRow();
+							dr["Sel"] = AddMODataSet.Tables[0].Rows[i]["Sel"];
+							dr["ProductDescription"] = AddMODataSet.Tables[0].Rows[i]["ProductDescription"];
+							dr["MOName"] = AddMODataSet.Tables[0].Rows[i]["MOName"];
+							dr["MOQtyRequired"] = AddMODataSet.Tables[0].Rows[i]["MOQtyRequired"];
+							MOds.Tables[0].Rows.Add(dr);
+						}
+					}
+				}
+				Scripter.SetParameterValue("OrderName", "");
+				Scripter.SetControlFocus("OrderName");
+			}
+		}
+
+		/// <summary>
+		/// 容器中按钮触发时的通用检查后置事件
+		/// </summary>
+		/// <param name="ButtonName">按钮名</param>
+		/// <param name="SPResult">存储过程执行的结果值</param>
+		/// <param name="SPMessage">存储过程执行的返回消息</param>
+		public void ButtonClickAfter(string ButtonName, bool SPResult, string SPMessage)
+		{
+			//to do.. 
+			if (SPResult && ButtonName == "SubmitPicking")
+			{
+				//刷新表格
+				DataSet ds = Scripter.GetParameterDataSet("MOAllotDetail");
+				DataSet MODS = Scripter.GetParameterDataSet("MOGrid");
+				for (int i = 0; i < MODS.Tables[0].Rows.Count; i++)
+				{
+					if (bool.Parse(MODS.Tables[0].Rows[i]["Check"].ToString()))
+					{
+						//扣除数量
+						if (decimal.Parse(MODS.Tables[0].Rows[i]["ItemQtyRequired"].ToString()) <= decimal.Parse(MODS.Tables[0].Rows[i]["PickingQty"].ToString()))
+						{
+							MODS.Tables[0].Rows.RemoveAt(i);
+							i--;
+						}
+						else
+						{
+							MODS.Tables[0].Rows[i]["PickingQty"] = decimal.Parse(MODS.Tables[0].Rows[i]["ItemQtyRequired"].ToString()) - decimal.Parse(MODS.Tables[0].Rows[i]["PickingQty"].ToString());
+						}
+						//						MODS.Tables[0].Rows[i]["RequestQty"] = MODS.Tables[0].Rows[i]["PickingQty"];
+					}
+				}
+				ds.Tables[0].Clear();
+			}
+		}
+
+		/// <summary>
+		/// 容器中网格或下拉列表选中某行时的触发事件
+		/// </summary>
+		/// <param name="ParameterName">对象参数名</param>
+		/// <param name="CellA">选中行第一列的值</param>
+		/// <param name="CellB">选中行第二列的值</param>
+		public void RowSelected(string ParameterName, string CellA, string CellB)
+		{
+			//to do..    
+			SetWorkCenterList(ParameterName, CellA);
+			//			if(ParameterName=="MOAllotDetail")
+			//			{
+			//				DataSet ds=Scripter.GetParameterDataSet(ParameterName);
+			//				for(int i=0;i<ds.Tables[0].Rows.Count;i++)
+			//				{
+			//					if(ds.Tables[0].Rows[i][0].ToString()==CellA&&ds.Tables[0].Rows[i][1].ToString()==CellB)
+			//					{
+			//						MessageBox.Show(CellA,Scripter.PlugInCommand);
+			//						if(bool.Parse(CellA))
+			//						{
+			//							ds.Tables[0].Rows[i][0]=false;
+			//						}
+			//						else
+			//						{
+			//							ds.Tables[0].Rows[i][0]=true;
+			//						}
+			//					}
+			//				}
+			//			}
+		}
+
+		/// <summary>
+		/// 容器中可输入控件获取光标焦点后触发的事件
+		/// </summary>
+		/// <param name="ParameterName">对象参数名</param>
+		public void ParameterEnter(string ParameterName)
+		{
+			//to do..   
+		}
+
+		/// <summary>
+		/// 容器中可输入控件按回车后触发的事件
+		/// </summary>
+		/// <param name="ParameterName">对象参数名</param>
+		/// <param name="ParameterValue">输入值</param>
+		/// <returns>True跳到下一个控件，False表示留在原控件中</returns>
+		public bool EnterPressed(string ParameterName, string ParameterValue)
+		{
+			//to do..
+			if (!SetWorkCenterList(ParameterName, ParameterValue))
+			{
+				return false;
+			}
+			return true;
+		}
+
+
+		/// <summary>
+		/// 批号扫描成功后触发的事件
+		/// </summary>
+		public void LotSNScanned(string LotSN)
+		{
+			//to do..
+		}
+
+		/// <summary>
+		/// 动态事务批号传送前触发的事件
+		/// </summary>
+		/// <returns>True允许执行Move，False终止</returns>
+		public bool LotMoveBefore(string LotId)
+		{
+			//to do..
+			return true;
+		}
+
+		/// <summary>
+		/// 动态事务批号传送后触发的事件
+		/// </summary>
+		public void LotMoved(string LotId)
+		{
+			//to do..
+		}
+
+		/// <summary>
+		/// 复位按钮触发的事件
+		/// </summary>
+		public void LotReset()
+		{
+			//to do..
+		}
+
+		private bool SetWorkCenterList(string ParameterName, string ParameterValue)
+		{
+			try
+			{
+				if (ParameterName == "OrderName")
+				{
+					string ProductionWhse = Scripter.GetParameterValue("ProductionWhse");
+					if (string.IsNullOrEmpty(ProductionWhse))
+					{
+						MessageBox.Show("请选择生产车间", Scripter.PlugInCommand);
+						Scripter.SetControlFocus("OrderName");
+						return false;
+					}
+
+					if (string.IsNullOrEmpty(ParameterValue))
+					{
+						return false;
+					}
+
+					string sql = string.Format(@"declare @p1 nvarchar(max)
+set @p1=NULL
+declare @p2 nvarchar(max)
+set @p2=NULL
+exec Txn_MOPickingRequestDoMethod @I_ReturnMessage=@p1 output,
+@I_ExceptionFieldName=@p2 output,@I_LanguageId=N'2',
+@I_Sender=N'GetMOList',@I_OrBitUserId=N'{0}',
+@I_OrBitUserName=N'{1}',@I_ResourceId=N'{2}',
+@I_ResourceName=N'{3}',@I_PlugInCommand=N'MPRQ',@I_PKId=N'',
+@I_ParentPKId=N'',@I_Parameter=N'[CountMax:100][Count:0]',
+@RequiredDate=NULL,@IsFirstXB=0,@StartDate=NULL,@EndDate=NULL,
+@OrderName=N'{4}',@ProductionWhse=N'{5}'", Scripter.OrBitUserId, Scripter.OrBitUserName, Scripter.ResourceId, Scripter.ResourceName, ParameterValue, ProductionWhse);
+
+					DataSet AddMODataSet = Scripter.GetSqlDataSet(sql);
+
+					if (AddMODataSet.Tables[0].Rows.Count > 0)
+					{
+						DataSet MOds = Scripter.GetParameterDataSet("MO");
+						for (int i = 0; i < AddMODataSet.Tables[0].Rows.Count; i++)
+						{
+							if (MOds.Tables[0].Select("MOName='" + AddMODataSet.Tables[0].Rows[i]["MOName"].ToString() + "'").Length == 0)
+							{
+								DataRow dr = MOds.Tables[0].NewRow();
+								dr["Sel"] = AddMODataSet.Tables[0].Rows[i]["Sel"];
+								dr["ProductDescription"] = AddMODataSet.Tables[0].Rows[i]["ProductDescription"];
+								dr["MOName"] = AddMODataSet.Tables[0].Rows[i]["MOName"];
+								dr["MOQtyRequired"] = AddMODataSet.Tables[0].Rows[i]["MOQtyRequired"];
+								MOds.Tables[0].Rows.Add(dr);
+							}
+						}
+					}
+					Scripter.SetParameterValue("OrderName", "");
+					Scripter.SetControlFocus("OrderName");
+				}
+				return false;
+			}
+			catch (Exception e)
+			{
+				MessageBox.Show(e.Message, Scripter.PlugInCommand);
+				return false;
+			}
+		}
+
+
+		private bool MOAllotRequestSubmit()
+		{
+			try
+			{
+				DataSet MOGrid = Scripter.GetParameterDataSet("MOGrid");
+				DataSet MOAllotDetail = Scripter.GetParameterDataSet("MOPickingDetail");
+				//做一下判断
+				if (MOGrid == null || MOGrid.Tables.Count == 0 || MOAllotDetail == null || MOAllotDetail.Tables.Count == 0)
+				{
+					MessageBox.Show("请扫描工单后重试！", Scripter.PlugInCommand);
+					return false;
+				}
+				bool check = false;
+
+				for (int i = 0; i < MOGrid.Tables[0].Rows.Count; i++)
+				{
+					if (bool.Parse(MOGrid.Tables[0].Rows[i]["Check"].ToString()))
+					{
+						check = true;
+						if (decimal.Parse(MOGrid.Tables[0].Rows[i]["PickingQty"].ToString()) <= 0)
+						{
+							MessageBox.Show("物料[" + MOGrid.Tables[0].Rows[i]["ProductDescription"].ToString() + "]本次领料数量必须大于0！", Scripter.PlugInCommand);
+							return false;
+						}
+					}
+				}
+				if (!check)
+				{
+					MessageBox.Show("请勾选需要领料的工单物料！", Scripter.PlugInCommand);
+					return false;
+				}
+
+				if (string.IsNullOrEmpty(Scripter.GetParameterValue("RequiredDate")))
+				{
+					MessageBox.Show("请选择要求交货日期！", Scripter.PlugInCommand);
+					return false;
+				}
+				DateTime RequiredDate = DateTime.Parse(Scripter.GetParameterValue("RequiredDate"));
+
+				//获取一个Id
+				string MOAllotRequestId = GetPKId("SOB1000002MO", "MOAllotRequest");
+
+
+				//将统计的工单信息和调拨信息插入事务临时表
+				string InsRequestSql = string.Format(@"INSERT INTO [dbo].[MOAllotRequest]
+	           ([MOAllotRequestId]
+	           ,[RequiredDate]
+	           ,[MOAllotRequestStates]
+	           ,[CreateUserId]
+               ,[RequestType])
+	     VALUES
+	           ('{0}'
+	           ,'{1}'
+	           ,'10'
+	           ,'{2}'
+               ,'PickingRP');
+	", MOAllotRequestId, RequiredDate.ToShortDateString(), Scripter.OrBitUserId);
+
+				for (int i = 0; i < MOGrid.Tables[0].Rows.Count; i++)
+				{
+					if (bool.Parse(MOGrid.Tables[0].Rows[i]["Check"].ToString()))
+					{
+						InsRequestSql += string.Format(@"INSERT INTO [dbo].[MOAllotMODetail]
+				           ([MOAllotMODetailId]
+		                   ,[MOAllotRequestId]
+				           ,[MOId]
+				           ,[MOItemId]
+				           ,[ProductId]
+		                   ,[ProductionLotNO]
+				           ,[AllotQty]
+				           ,[TempFactoryId]
+				           ,[TempWorkcenterId]
+		                   ,[ToFactoryId]
+				           ,[ToWareHouseId])
+				     VALUES
+				           ('{0}'
+				           ,'{1}'
+				           ,'{2}'
+				           ,'{3}'
+				           ,'{4}'
+				           ,'{5}'
+				           ,'{6}'
+				           ,'{7}'
+				           ,'{8}'
+				           ,'{9}'
+				           ,'{10}');
+				", GetPKId("SOB1000002MP", "MOAllotMODetail"), MOAllotRequestId, MOGrid.Tables[0].Rows[i]["MOId"].ToString()
+						   , MOGrid.Tables[0].Rows[i]["MOItemId"].ToString()
+						   , MOGrid.Tables[0].Rows[i]["ProductId"].ToString()
+						   , MOGrid.Tables[0].Rows[i]["ProductionLotNO"].ToString()
+						   , MOGrid.Tables[0].Rows[i]["PickingQty"].ToString()
+						   , MOGrid.Tables[0].Rows[i]["TempFactoryId"].ToString()
+						   , MOGrid.Tables[0].Rows[i]["TempWorkcenterId"].ToString()
+						   , MOGrid.Tables[0].Rows[i]["ToFactoryId"].ToString()
+						   , MOGrid.Tables[0].Rows[i]["ToWareHouseId"].ToString());
+					}
+				}
+
+				for (int i = 0; i < MOAllotDetail.Tables[0].Rows.Count; i++)
+				{
+					InsRequestSql += string.Format(@"INSERT INTO [dbo].[MOAllotDetail]
+			           ([MOAllotDetailId]
+			           ,[MOAllotRequestId]
+			           ,[ProductId]
+			           ,[AllotQty]
+			           ,[FromFactoryId]
+			           ,[FromWareHouseId]
+			           ,[ToFactoryId]
+			           ,[ToWareHouseId]
+                       ,[IsMergeMO])
+			     VALUES
+			           ('{0}'
+			           ,'{1}'
+			           ,'{2}'
+			           ,'{3}'
+			           ,'{4}'
+			           ,'{5}'
+			           ,'{6}'
+			           ,'{7}'
+			           ,'{8}');
+			", GetPKId("SOB1000002MQ", "MOAllotDetail"), MOAllotRequestId, MOAllotDetail.Tables[0].Rows[i]["ProductId"].ToString()
+					   , MOAllotDetail.Tables[0].Rows[i]["PickingQty"].ToString()
+					   , MOAllotDetail.Tables[0].Rows[i]["FromFactoryId"].ToString()
+					   , MOAllotDetail.Tables[0].Rows[i]["FromWareHouseId"].ToString()
+					   , MOAllotDetail.Tables[0].Rows[i]["ToFactoryId"].ToString()
+					   , MOAllotDetail.Tables[0].Rows[i]["ToWareHouseId"].ToString()
+					   , MOAllotDetail.Tables[0].Rows[i]["IsMergeMO"]);
+				}
+				InsRequestSql += "select '' as TransId";
+				//执行
+				Scripter.GetSqlDataSet(InsRequestSql);
+
+				Scripter.SetParameterValue("TransId", MOAllotRequestId);
+				return true;
+			}
+			catch (Exception ex)
+			{
+				MessageBox.Show(ex.Message, Scripter.PlugInCommand);
+				return false;
+			}
+		}
+
+		//数据加载后设置
+		private void Grid_AfterDataLoad_Setting()
+		{
+			//允许数据变化
+			MOItemGrid.DisplayLayout.Override.AllowUpdate = Infragistics.Win.DefaultableBoolean.True;
+			//启动筛选
+			MOItemGrid.DisplayLayout.Override.AllowRowFiltering = Infragistics.Win.DefaultableBoolean.True;
+			//是否删除
+			MOItemGrid.DisplayLayout.Override.AllowDelete = Infragistics.Win.DefaultableBoolean.True;
+			//行头选择
+			MOItemGrid.DisplayLayout.Override.RowSelectors = Infragistics.Win.DefaultableBoolean.True;
+
+			//设置列
+			foreach (Infragistics.Win.UltraWinGrid.UltraGridColumn column in MOItemGrid.DisplayLayout.Bands[0].Columns)
+			{
+				column.CellActivation = Infragistics.Win.UltraWinGrid.Activation.NoEdit;
+			}
+			MOItemGrid.DisplayLayout.Bands[0].Columns["Check"].CellActivation = Infragistics.Win.UltraWinGrid.Activation.AllowEdit;
+			MOItemGrid.DisplayLayout.Bands[0].Columns["PickingQty"].CellActivation = Infragistics.Win.UltraWinGrid.Activation.AllowEdit;
+			//			IPQACheckCItem.DisplayLayout.Bands[0].Columns["AllotQtyCurrent"].CellActivation=Infragistics.Win.UltraWinGrid.Activation.AllowEdit;	
+
+			//单元格点击动作
+			MOItemGrid.DisplayLayout.Override.CellClickAction = Infragistics.Win.UltraWinGrid.CellClickAction.Edit;
+			//设置单元格宽度
+			MOItemGrid.DisplayLayout.Bands[0].Columns["Check"].Width = 30;
+			//离开退出编辑模式
+			MOItemGrid.ExitEditModeOnLeave = true;
+
+			//允许数据变化
+			MOGrid.DisplayLayout.Override.AllowUpdate = Infragistics.Win.DefaultableBoolean.True;
+			//启动筛选
+			MOGrid.DisplayLayout.Override.AllowRowFiltering = Infragistics.Win.DefaultableBoolean.True;
+			//是否删除
+			MOGrid.DisplayLayout.Override.AllowDelete = Infragistics.Win.DefaultableBoolean.True;
+			//MOGrid
+			MOGrid.DisplayLayout.Override.RowSelectors = Infragistics.Win.DefaultableBoolean.True;
+
+			//设置列
+			foreach (Infragistics.Win.UltraWinGrid.UltraGridColumn column in MOGrid.DisplayLayout.Bands[0].Columns)
+			{
+				column.CellActivation = Infragistics.Win.UltraWinGrid.Activation.NoEdit;
+			}
+			MOGrid.DisplayLayout.Bands[0].Columns["Sel"].CellActivation = Infragistics.Win.UltraWinGrid.Activation.AllowEdit;
+			//			IPQACheckCItem.DisplayLayout.Bands[0].Columns["AllotQtyCurrent"].CellActivation=Infragistics.Win.UltraWinGrid.Activation.AllowEdit;	
+
+			//单元格点击动作
+			MOGrid.DisplayLayout.Override.CellClickAction = Infragistics.Win.UltraWinGrid.CellClickAction.Edit;
+			//设置单元格宽度
+			MOGrid.DisplayLayout.Bands[0].Columns["Sel"].Width = 30;
+			MOGrid.DisplayLayout.Bands[0].Columns["MOName"].Width = 90;
+			//离开退出编辑模式
+			MOGrid.ExitEditModeOnLeave = true;
+		}
+
+		private string GetPKId(string ObjectId, string ObjectName)
+		{
+			string GetPKIdSql = string.Format(@"declare @PK_Id char(12)=''
+EXEC SysGetObjectPKId '{0}','{1}',@PK_Id OUTPUT
+select @PK_Id", ObjectId, ObjectName);
+			return Scripter.GetSqlDataSet(GetPKIdSql).Tables[0].Rows[0][0].ToString();
+		}
+	}
+}

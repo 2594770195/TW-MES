@@ -201,3 +201,15 @@ AvailableQty = WW_RMInventory.Qty - AllocatedQty
 - 存储过程脚本放 `MES/procedure/MOSemiFinishedLotAllocationDoMethod.sql`。
 - 除 SELECT 外不直接在生产执行，需 DBA 审批后部署。
 - 部署后先用测试工单验证查询、分配、删除和可用库存恢复。
+
+---
+
+## 6. PDA 灌墨实际消费衔接（摘要）
+
+本规格负责预分配台账的写入与查询；PDA 灌墨消费、数量确认、完工领料与占用释放的完整设计见独立规格：
+
+- `.spec-workflow/specs/finished-ink-allocation-picking/requirements.md`
+- `.spec-workflow/specs/finished-ink-allocation-picking/design.md`
+- `.spec-workflow/specs/finished-ink-allocation-picking/tasks.md`
+
+核心链路：扫描校验预分配 → 计算可用量 → 必要时数量确认 → 完工前生成领料单 → 过站报工 → 释放 `IsOccupyAllocatedQty`。
