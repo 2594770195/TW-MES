@@ -16,7 +16,7 @@ GO
 --   DeleteLot        按分配记录 ID 逻辑删除
 -- 错误返回：失败时设置 @I_ReturnMessage='ServerMessage:...' 并 RETURN -1
 -- =============================================
-ALTER PROCEDURE [dbo].[MOSemiFinishedLotAllocationDoMethod]
+CREATE PROCEDURE [dbo].[MOSemiFinishedLotAllocationDoMethod]
 @I_Sender nvarchar(200) = '',					-- 功能分支
 @I_ReturnMessage nvarchar(max) = '' OUTPUT,		-- 返回的信息,支持多语言
 @I_ExceptionFieldName nvarchar(100) = '' OUTPUT,-- 向客户端报告引起冲突的字段
