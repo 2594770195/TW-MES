@@ -6,11 +6,11 @@ GO
 -- Author:        <OrBit Team HH0082 Sunshineding>
 -- Create date:   <2021/08/13 >
 -- Description:   <成品灌墨>
--- Rev: 15.00
--- Update comment:
--- Update date:  <2021/09/29>
+-- Rev: 15.01
+-- Update comment: 预分配批次准入、实时扣库存、完工领料与占用释放
+-- Update date:  <2026/07/17>
 -- =============================================
-CREATE PROC [dbo].[PDA_FPInkCheckInput]
+alter PROC [dbo].[PDA_FPInkCheckInput]
 @I_Sender NVARCHAR(200) = '',                    --客户端执行按钮
 @I_ReturnMessage NVARCHAR(MAX) = '' OUTPUT,      --返回的信息,支持多语言	
 @I_ExceptionFieldName NVARCHAR(100) = '' OUTPUT, --向客户端报告引起冲突的字段
@@ -99,6 +99,11 @@ BEGIN
 	DECLARE @NewLotQty INT
 	DECLARE @Count INT
 	DECLARE @Qty DECIMAL(18,4)
+	DECLARE @WWId CHAR(12)='' -- 当前扫描批次的库存记录ID
+	DECLARE @LotAvailableQty DECIMAL(18,4)=0 -- 当前批次可用库存数量
+	DECLARE @MRemainQty DECIMAL(18,4)=0 -- 当前工单物料剩余需求数量
+	DECLARE @InventoryQtyBefore DECIMAL(18,4)=0 -- 扣减前批次库存数量
+	DECLARE @Remark NVARCHAR(200)='' -- 批次跟踪备注
 
 	DECLARE @LoadingItemLotMoveId CHAR(12)
 	DECLARE @I_ReturnMessage1 NVARCHAR(MAX) ='',
@@ -523,6 +528,45 @@ BEGIN
             FROM dbo.MO
             WHERE MOName = @MOName;
 
+			-- 【校验】工单扫描时校验有效预分配批次的实时库存是否覆盖分配数量
+			SET @IssueMOItemId=''
+			;WITH AllocationSummary AS
+			(
+				SELECT MOItemId,ProductId,SUM(Qty) AS AllocatedQty
+				FROM dbo.MOSemiFinishedLotAllocation
+				WHERE MOId=@MOId AND DeleteFlag='0' AND IsOccupyAllocatedQty=1
+				GROUP BY MOItemId,ProductId
+			),
+			AllocationInventory AS
+			(
+				SELECT DISTINCT MOItemId,ProductId,WWId
+				FROM dbo.MOSemiFinishedLotAllocation
+				WHERE MOId=@MOId AND DeleteFlag='0' AND IsOccupyAllocatedQty=1
+			),
+			InventorySummary AS
+			(
+				SELECT A.MOItemId,A.ProductId,SUM(ISNULL(I.Qty,0)) AS InventoryQty
+				FROM AllocationInventory A
+				LEFT JOIN dbo.WW_RMInventory I ON I.WWId=A.WWId
+					AND I.LotStatus='1' AND I.IsStorage=1
+				GROUP BY A.MOItemId,A.ProductId
+			)
+			SELECT TOP 1 @IssueMOItemId=A.MOItemId,@MProductId=A.ProductId,@CurrMaterial=ProductRoot.ProductName
+			FROM AllocationSummary A
+			LEFT JOIN InventorySummary I ON I.MOItemId=A.MOItemId AND I.ProductId=A.ProductId
+			LEFT JOIN dbo.Product P ON P.ProductId=A.ProductId
+            LEFT JOIN  dbo.ProductRoot ON ProductRoot.ProductRootId = P.ProductRootId
+			WHERE ISNULL(I.InventoryQty,0)<A.AllocatedQty
+			ORDER BY ProductRoot.ProductName
+
+			IF ISNULL(@IssueMOItemId,'')<>''
+			BEGIN
+				SELECT '' AS InputScan
+				SET @I_ExceptionFieldName='InputScan'
+				SET @I_ReturnMessage='ServerMessage:[工单号]['+@MOName+'][物料号]['+ISNULL(@CurrMaterial,@MProductId)+']当前分配批次库存不足，请仓库重新分配！'+@Enter
+				RETURN -1
+			END
+
 			SELECT @MOProductName=ProductName,@MOProductDescription=ProductDescription FROM dbo.Product 
 			INNER JOIN dbo.ProductRoot ON ProductRoot.ProductRootId = Product.ProductRootId
 			WHERE ProductId=@MOProductId
@@ -836,6 +880,8 @@ BEGIN
         END;
 
 
+        -- 【保留】以下领料批次兼容及-001补码逻辑，改由预分配批次准入与实时库存校验替代，不再执行
+		/*
         --水性成品灌墨如果找不到对应的批号，则在当前输入批号的后面加上-001（初期打印）
         IF NOT EXISTS (SELECT 1 FROM dbo.WW_RMInventory WHERE LotSN=@InputScan
 		           UNION ALL SELECT 1 FROM dbo.PickingListItemLot
@@ -882,19 +928,27 @@ BEGIN
 
             END
         END
-
-		IF EXISTS (SELECT 1 FROM dbo.WW_RMInventory WHERE LotSN=@InputScan
-		           UNION ALL SELECT 1 FROM dbo.PickingListItemLot 
-			          INNER JOIN dbo.PickingListItem ON PickingListItem.PickingListItemId = PickingListItemLot.PickingListItemId 
-					  WHERE MOId =@MOId AND OrgLotSN=@InputScan)
+		*/
+		--取消校验是否存在领料单，改由预分配批次准入与实时库存校验替代，不再执行
+		-- IF EXISTS (SELECT 1 FROM dbo.WW_RMInventory WHERE LotSN=@InputScan
+		--            UNION ALL SELECT 1 FROM dbo.PickingListItemLot 
+		-- 	          INNER JOIN dbo.PickingListItem ON PickingListItem.PickingListItemId = PickingListItemLot.PickingListItemId 
+		-- 			  WHERE MOId =@MOId AND OrgLotSN=@InputScan)
+		IF EXISTS (SELECT 1 FROM dbo.WW_RMInventory
+			WHERE LotSN=@InputScan AND LotStatus='1' AND IsStorage=1 AND Qty>0)
 		BEGIN
 		  
-		    SELECT @MLotId=LotId,@MLotSN =LotSN,@MProductId=WW_RMInventory.ProductId,@DateCode=ProductionLotNO
-			        FROM dbo.WW_RMInventory  WHERE LotSN=@InputScan
+		    SELECT @WWId=WWId,@MLotId=LotId,@MLotSN=LotSN,@MProductId=ProductId,
+				   @DateCode=ProductionLotNO,@LotAvailableQty=Qty
+			FROM dbo.WW_RMInventory
+			WHERE LotSN=@InputScan AND LotStatus='1' AND IsStorage=1 AND Qty>0
 
+			-- 【保留】原按领料单数量计算自动使用量，改由实时库存数量计算，不再执行
+			/*
 			SELECT @BeginQty=SUM(PickingListItemLot.Qty) FROM dbo.PickingListItemLot 
 			    INNER JOIN dbo.PickingListItem ON PickingListItem.PickingListItemId = PickingListItemLot.PickingListItemId 
 				WHERE MOId =@MOId AND (OrgLotSN=@InputScan OR LotSN=@InputScan)
+			*/
 
 			IF NOT EXISTS (SELECT 1 FROM dbo.MOItem WHERE  MOId=@MOId AND ProductId=@MProductId)
 			BEGIN
@@ -955,6 +1009,8 @@ BEGIN
 				RETURN -1
 			END
 
+			-- 【保留】原已领料校验，改由有效预分配记录校验替代，不再执行
+			/*
 		    IF NOT EXISTS (SELECT 1 FROM dbo.PickingListItemLot 
 			          INNER JOIN dbo.PickingListItem ON PickingListItem.PickingListItemId = PickingListItemLot.PickingListItemId 
 					  WHERE MOId =@MOId AND LotSN=@InputScan 
@@ -965,6 +1021,22 @@ BEGIN
 				SELECT '' InputScan ,'0' InputNumber,'' Command 
 				SET @I_ExceptionFieldName = 'InputScan';
 				SET @I_ReturnMessage =  'ServerMessage:墨水批次【' + @InputScan + '】未进行工单【'+@MOName+' '+ @MOId+ '】领料，请更换批次扫描！' + @Enter 
+				RETURN -1
+			END
+			*/
+
+			-- 【校验】扫描批次必须为当前工单物料有效且仍占用的预分配批次
+			IF NOT EXISTS
+			(
+				SELECT 1
+				FROM dbo.MOSemiFinishedLotAllocation
+				WHERE MOId=@MOId AND MOItemId=@IssueMOItemId AND ProductId=@MProductId
+					AND LotSN=@InputScan AND DeleteFlag='0' AND IsOccupyAllocatedQty=1
+			)
+			BEGIN
+				SELECT '' InputScan,'0' InputNumber,'' Command
+				SET @I_ExceptionFieldName='InputScan'
+				SET @I_ReturnMessage='ServerMessage:[墨水批次]['+@InputScan+']未指定给工单['+@MOName+']，请更换批次扫描！'+@Enter
 				RETURN -1
 			END
 			
@@ -985,19 +1057,46 @@ BEGIN
 			BEGIN
 			    SET @MActualQty=0
 			END
+			-- 不再提前领料，取数逻辑修改
+			-- IF ISNULL(@MActualQty,0) + ISNULL(@BeginQty,0) <= ISNULL(@MQtyRequired,0)
+			-- BEGIN
+			--     SET @UsedQty=ISNULL(@BeginQty,0)  
+			-- END
+			-- ELSE
+			-- BEGIN
+			--     SET @UsedQty=ISNULL(@MQtyRequired,0)-ISNULL(@MActualQty,0)
+			-- END
 
-			IF ISNULL(@MActualQty,0) + ISNULL(@BeginQty,0) <= ISNULL(@MQtyRequired,0)
+			-- 【计算】库存写入时已实时扣减，当前库存余额即为批次可用量
+			SET @MRemainQty=ISNULL(@MQtyRequired,0)-ISNULL(@MActualQty,0)
+			IF @LotAvailableQty<=0 OR @MRemainQty<=0
 			BEGIN
-			    SET @UsedQty=ISNULL(@BeginQty,0)  
+				SELECT '' InputScan,'0' InputNumber,'' Command
+				SET @I_ExceptionFieldName='InputScan'
+				SET @I_ReturnMessage='ServerMessage:[墨水批次]['+@InputScan+']已无可用库存数量或工单剩余需求，请更换批次扫描！'+@Enter
+				RETURN -1
 			END
-			ELSE
+
+			IF @LotAvailableQty>@MRemainQty
 			BEGIN
-			    SET @UsedQty=ISNULL(@MQtyRequired,0)-ISNULL(@MActualQty,0)
+				SELECT CAST(@MRemainQty AS NVARCHAR(50)) AS InputNumber,
+					   @MRemainQty AS MQtyRequired,
+					   @MActualQty AS MActualQty,
+					   @InputScan AS InputScan,
+					   'MLotSNScan' AS Command
+				SET @I_ExceptionFieldName='InputNumber'
+				SET @I_ReturnMessage='ServerMessage:墨水批次【'+@InputScan+'】可用数量大于剩余需求，请确认使用数量【'+CAST(@MRemainQty AS NVARCHAR(50))+'】'+@Enter
+				RETURN 0
 			END
+
+			SET @UsedQty=@LotAvailableQty
 
 			SET @InputNumber = CAST( CAST(ISNULL(@UsedQty,0) AS DECIMAL(18,3)) AS VARCHAR(50))
             
 			--/***************************************自动确认数量***************************************/
+			-- 【事务】自动写入时同步完成上料明细、库存扣减、批次跟踪和数据链记录
+			BEGIN TRY
+				BEGIN TRANSACTION InkLoading
 			SELECT @SpecificationId= WorkSpecificationId FROM dbo.MOItemTask WHERE MOItemTaskId=@MOItemTaskId
 
 			SELECT @LoadingItemLotDetailId=LoadingItemLotDetailId FROM dbo.LoadingItemLotDetail WHERE LoadingItemLotId=@LoadingItemLotId AND MOItemId=@IssueMOItemId
@@ -1033,7 +1132,44 @@ BEGIN
 				UPDATE LoadingItemLotDetail SET ActualQty=ISNULL(@MActualQty,0)+ISNULL(@UsedQty,0) WHERE LoadingItemLotDetailId=@LoadingItemLotDetailId
 			END
 			SELECT  @CurrMActualQty= ActualQty FROM LoadingItemLotDetail WHERE LoadingItemLotDetailId=@LoadingItemLotDetailId		
-						
+
+			-- 【校验与扣减】按库存主键再次校验余额后扣减本次实际使用数量
+			SELECT @InventoryQtyBefore=Qty
+			FROM dbo.WW_RMInventory
+			WHERE WWId=@WWId AND LotStatus='1' AND IsStorage=1
+
+			IF ISNULL(@InventoryQtyBefore,0)<@UsedQty
+			BEGIN
+				ROLLBACK TRANSACTION InkLoading
+				SET @I_ExceptionFieldName='InputScan'
+				SET @I_ReturnMessage='ServerMessage:墨水批次库存不足，无法完成上料'+@Enter
+				RETURN -1
+			END
+
+			UPDATE dbo.WW_RMInventory
+			SET Qty=Qty-@UsedQty,ModifyDate=GETDATE()
+			WHERE WWId=@WWId
+
+			IF @@ROWCOUNT<>1
+			BEGIN
+				ROLLBACK TRANSACTION InkLoading
+				SET @I_ExceptionFieldName='InputScan'
+				SET @I_ReturnMessage='ServerMessage:墨水批次库存不足，无法完成上料'+@Enter
+				RETURN -1
+			END
+
+			-- 【追溯】记录本次上料引起的批次库存变更
+			SET @Remark='当前批次数量['+CAST(@InventoryQtyBefore AS NVARCHAR(19))+']，工单['+@MOName+']投料使用数量['+CAST(@UsedQty AS NVARCHAR(19))+']，剩余数量['+CAST((@InventoryQtyBefore-@UsedQty) AS NVARCHAR(19))+']'
+			EXEC dbo.TxnBase_MLotTrack
+				@I_OrBitUserId=@I_OrBitUserId,
+				@I_PlugInCommand=@I_PlugInCommand,
+				@I_ResourceId=@I_ResourceId,
+				@LotSN=@MLotSN,
+				@LotQty=@UsedQty,
+				@TxnCode='M-生产上料',
+				@OrderName=@MOName,
+				@Remark=@Remark
+
 			EXEC dbo.SysGetObjectPKId @ObjectId = 'LoadingItemLotRecordId',      -- char(12)
 										@ObjectName = N'LoadingItemLotRecord',   -- nvarchar(100)
 										@PKID = @LoadingItemLotRecordId OUTPUT -- char(12)
@@ -1143,6 +1279,17 @@ BEGIN
 				GETDATE()  -- CreateDate - datetime
 				)
 
+			COMMIT TRANSACTION InkLoading
+			END TRY
+			BEGIN CATCH
+				IF @@TRANCOUNT>0
+					ROLLBACK TRANSACTION InkLoading
+
+				SET @I_ExceptionFieldName='InputScan'
+				SET @I_ReturnMessage='ServerMessage:墨水批次【'+@InputScan+'】上料写入失败：'+ERROR_MESSAGE()+@Enter
+				RETURN -1
+			END CATCH
+
 			--墨水批次扫完自动完工移送
 			IF @MQtyRequired<=ISNULL(@MActualQty,0)+ISNULL(@UsedQty,0)
 			BEGIN
@@ -1166,6 +1313,20 @@ BEGIN
 					SET @Counter=@Counter+1
 				END
 	
+				-- 【领料】自动完工前为当前上料会话的未领料记录生成生产领料单
+				EXEC @RESULT=dbo.PDA_ProductionMakingSubmit
+					@I_Sender='MakingComplete',
+					@I_ReturnMessage=@I_ReturnMessage OUTPUT,
+					@I_ExceptionFieldName=@I_ExceptionFieldName OUTPUT,
+					@I_PlugInCommand=@I_PlugInCommand,
+					@I_OrBitUserId=@I_OrBitUserId,
+					@I_OrBitUserName=@I_OrBitUserName,
+					@I_ResourceId=@I_ResourceId,
+					@I_ResourceName=@I_ResourceName,
+					@LoadingItemLotId=@LoadingItemLotId
+				IF @RESULT<>0
+					RETURN @RESULT
+
 
 				---------------------------------------------------------------------------------------------
 				SELECT  @WorkflowId=WorkflowId,@WorkflowStepId = WorkflowStepId,@SpecificationId=SpecificationId,@LotId=LotId,@Qty=Qty FROM dbo.Lot WHERE LotSN=@LotSN
@@ -1296,6 +1457,15 @@ BEGIN
 										   @Qty = @Qty                                            -- nvarchar(30)
 				END
 
+				-- 【释放】过站报工完成后，仅释放当前上料会话实际使用批次的预分配占用
+				UPDATE A
+				SET A.IsOccupyAllocatedQty=0,A.ModifyDate=GETDATE()
+				FROM dbo.MOSemiFinishedLotAllocation A
+				INNER JOIN dbo.LoadingItemLotRecord R ON R.LotSN=A.LotSN
+				INNER JOIN dbo.LoadingItemLotDetail D ON D.LoadingItemLotDetailId=R.LoadingItemLotDetailId
+				WHERE D.LoadingItemLotId=@LoadingItemLotId AND A.MOId=@MOId
+					AND A.MOItemId=D.MOItemId AND A.DeleteFlag='0' AND A.IsOccupyAllocatedQty=1
+
 				SELECT @MOItemTaskName=MOItemTaskName FROM dbo.MOItemTask WHERE @MOItemTaskId= MOItemTaskId 
 				SELECT 
 						'' AS Command,
@@ -1353,14 +1523,20 @@ BEGIN
         SET @I_ExceptionFieldName = 'InputScan';
 		IF @Command ='MLotSNScan'
 		BEGIN
-			IF EXISTS (SELECT 1 FROM dbo.WW_RMInventory WHERE LotSN=@InputScan)
+			IF EXISTS (SELECT 1 FROM dbo.WW_RMInventory
+				WHERE LotSN=@InputScan AND LotStatus='1' AND IsStorage=1 AND Qty>0)
 			BEGIN
-				 SELECT @MLotId=LotId,@MLotSN =LotSN,@MProductId=WW_RMInventory.ProductId,@DateCode=ProductionLotNO
-			        FROM dbo.WW_RMInventory  WHERE LotSN=@InputScan
+				 SELECT @WWId=WWId,@MLotId=LotId,@MLotSN=LotSN,@MProductId=ProductId,
+						@DateCode=ProductionLotNO,@LotAvailableQty=Qty
+				 FROM dbo.WW_RMInventory
+				 WHERE LotSN=@InputScan AND LotStatus='1' AND IsStorage=1 AND Qty>0
 
+				-- 【保留】原按领料单查询数量逻辑，改由实时库存数量计算，不再执行
+				/*
 				SELECT @BeginQty=SUM(PickingListItemLot.Qty) FROM dbo.PickingListItemLot 
 			    INNER JOIN dbo.PickingListItem ON PickingListItem.PickingListItemId = PickingListItemLot.PickingListItemId 
 				WHERE MOId =@MOId AND (OrgLotSN=@InputScan OR LotSN=@InputScan)
+				*/
 
 				IF NOT EXISTS (SELECT 1 FROM dbo.MOItem WHERE  MOId=@MOId AND ProductId=@MProductId)
 				BEGIN
@@ -1421,6 +1597,8 @@ BEGIN
 					RETURN -1
 				END
 
+				-- 【保留】原已领料校验，改由有效预分配记录校验替代，不再执行
+				/*
 				IF NOT EXISTS (SELECT 1 FROM dbo.PickingListItemLot 
 						  INNER JOIN dbo.PickingListItem ON PickingListItem.PickingListItemId = PickingListItemLot.PickingListItemId 
 						  WHERE MOId =@MOId AND LotSN=@InputScan 
@@ -1431,6 +1609,22 @@ BEGIN
 					SELECT '' InputScan ,'0' InputNumber,'' Command 
 					SET @I_ExceptionFieldName = 'InputScan';
 					SET @I_ReturnMessage =  'ServerMessage:墨水批次【' + @InputScan + '】未进行工单【'+@MOName+ '】领料，请更换批次扫描！' + @Enter;
+					RETURN -1
+				END
+				*/
+
+				-- 【校验】数量确认时重新校验扫描批次仍属于当前工单有效预分配
+				IF NOT EXISTS
+				(
+					SELECT 1
+					FROM dbo.MOSemiFinishedLotAllocation
+					WHERE MOId=@MOId AND MOItemId=@IssueMOItemId AND ProductId=@MProductId
+						AND LotSN=@InputScan AND DeleteFlag='0' AND IsOccupyAllocatedQty=1
+				)
+				BEGIN
+					SELECT '' InputScan,'0' InputNumber,'' Command
+					SET @I_ExceptionFieldName='InputScan'
+					SET @I_ReturnMessage='ServerMessage:[墨水批次]['+@InputScan+']未指定给工单['+@MOName+']，请更换批次扫描！'+@Enter
 					RETURN -1
 				END
 		
@@ -1464,7 +1658,18 @@ BEGIN
 					RETURN -1;
 				END
 
+				-- 【校验】确认数量不得超过当前库存余额或工单物料剩余需求
+				SET @MRemainQty=ISNULL(@MQtyRequired,0)-ISNULL(@MActualQty,0)
+				IF @UsedQty<=0 OR @UsedQty>@LotAvailableQty OR @UsedQty>@MRemainQty
+				BEGIN
+					SET @I_ReturnMessage='ServerMessage:[输入数量]['+CAST(@InputNumber AS NVARCHAR(50))+']超过墨水批次['+@InputScan+']可用库存数量或工单剩余需求，请重新输入'+@Enter
+					SET @I_ExceptionFieldName='InputNumber'
+					RETURN -1
+				END
 
+				-- 【事务】数量确认时同步完成上料明细、库存扣减、批次跟踪和数据链记录
+				BEGIN TRY
+					BEGIN TRANSACTION InkLoading
 				SELECT @SpecificationId= WorkSpecificationId FROM dbo.MOItemTask WHERE MOItemTaskId=@MOItemTaskId
 
 				SELECT @LoadingItemLotDetailId=LoadingItemLotDetailId FROM dbo.LoadingItemLotDetail WHERE LoadingItemLotId=@LoadingItemLotId AND MOItemId=@IssueMOItemId
@@ -1500,7 +1705,44 @@ BEGIN
 					UPDATE LoadingItemLotDetail SET ActualQty=ISNULL(@MActualQty,0)+ISNULL(@UsedQty,0) WHERE LoadingItemLotDetailId=@LoadingItemLotDetailId
 				END
 				SELECT  @CurrMActualQty= ActualQty FROM LoadingItemLotDetail WHERE LoadingItemLotDetailId=@LoadingItemLotDetailId		
-						
+
+				-- 【校验与扣减】按库存主键再次校验余额后扣减本次实际使用数量
+				SELECT @InventoryQtyBefore=Qty
+				FROM dbo.WW_RMInventory
+				WHERE WWId=@WWId AND LotStatus='1' AND IsStorage=1
+
+				IF ISNULL(@InventoryQtyBefore,0)<@UsedQty
+				BEGIN
+					ROLLBACK TRANSACTION InkLoading
+				SET @I_ExceptionFieldName='InputScan'
+				SET @I_ReturnMessage='ServerMessage:墨水批次库存不足，无法完成上料'+@Enter
+				RETURN -1
+				END
+
+				UPDATE dbo.WW_RMInventory
+				SET Qty=Qty-@UsedQty,ModifyDate=GETDATE()
+				WHERE WWId=@WWId AND LotStatus='1' AND IsStorage=1 AND Qty>=@UsedQty
+
+				IF @@ROWCOUNT<>1
+				BEGIN
+					ROLLBACK TRANSACTION InkLoading
+				SET @I_ExceptionFieldName='InputScan'
+				SET @I_ReturnMessage='ServerMessage:墨水批次库存不足，无法完成上料'+@Enter
+				RETURN -1
+				END
+
+				-- 【追溯】记录本次上料引起的批次库存变更
+				SET @Remark='当前批次数量['+CAST(@InventoryQtyBefore AS NVARCHAR(19))+']，工单['+@MOName+']投料使用数量['+CAST(@UsedQty AS NVARCHAR(19))+']，剩余数量['+CAST((@InventoryQtyBefore-@UsedQty) AS NVARCHAR(19))+']'
+				EXEC dbo.TxnBase_MLotTrack
+					@I_OrBitUserId=@I_OrBitUserId,
+					@I_PlugInCommand=@I_PlugInCommand,
+					@I_ResourceId=@I_ResourceId,
+					@LotSN=@MLotSN,
+					@LotQty=@UsedQty,
+					@TxnCode='M-生产上料',
+					@OrderName=@MOName,
+					@Remark=@Remark
+
 				EXEC dbo.SysGetObjectPKId @ObjectId = 'LoadingItemLotRecordId',      -- char(12)
 										  @ObjectName = N'LoadingItemLotRecord',   -- nvarchar(100)
 										  @PKID = @LoadingItemLotRecordId OUTPUT -- char(12)
@@ -1610,6 +1852,17 @@ BEGIN
 					GETDATE()  -- CreateDate - datetime
 					)
 
+				COMMIT TRANSACTION InkLoading
+				END TRY
+				BEGIN CATCH
+					IF @@TRANCOUNT>0
+						ROLLBACK TRANSACTION InkLoading
+
+					SET @I_ExceptionFieldName='InputNumber'
+					SET @I_ReturnMessage='ServerMessage:墨水批次【'+@InputScan+'】上料写入失败：'+ERROR_MESSAGE()+@Enter
+					RETURN -1
+				END CATCH
+
 				SELECT  '0' AS InputNumber,
 						ISNULL(@MQtyRequired,0) AS MQtyRequired ,
 						ISNULL(@CurrMActualQty,0.001) AS MActualQty,
@@ -1638,6 +1891,20 @@ BEGIN
 			LEFT JOIN dbo.LoadingItemLotDetail ON LoadingItemLotDetail.LoadingItemLotDetailId = LoadingItemLotRecord.LoadingItemLotDetailId
 			LEFT JOIN dbo.LoadingItemLot ON LoadingItemLot.LoadingItemLotId = LoadingItemLotDetail.LoadingItemLotId
 			WHERE LoadingItemLot.LoadingItemLotId =@LoadingItemLotId
+
+			-- 【领料】手工批次下线前为当前上料会话的未领料记录生成生产领料单
+			EXEC @RESULT=dbo.PDA_ProductionMakingSubmit
+				@I_Sender='MakingComplete',
+				@I_ReturnMessage=@I_ReturnMessage OUTPUT,
+				@I_ExceptionFieldName=@I_ExceptionFieldName OUTPUT,
+				@I_PlugInCommand=@I_PlugInCommand,
+				@I_OrBitUserId=@I_OrBitUserId,
+				@I_OrBitUserName=@I_OrBitUserName,
+				@I_ResourceId=@I_ResourceId,
+				@I_ResourceName=@I_ResourceName,
+				@LoadingItemLotId=@LoadingItemLotId
+			IF @RESULT<>0
+				RETURN @RESULT
 
 		
 			--SELECT @MaxCnt=COUNT(*),@Counter=MIN(Id) FROM @MSntemp
@@ -1779,6 +2046,15 @@ BEGIN
 		                               @Line = '10',                                 -- nvarchar(30)
 		                               @Qty = @Qty                                            -- nvarchar(30)
 		    END
+
+			-- 【释放】过站报工完成后，仅释放当前上料会话实际使用批次的预分配占用
+			UPDATE A
+			SET A.IsOccupyAllocatedQty=0,A.ModifyDate=GETDATE()
+			FROM dbo.MOSemiFinishedLotAllocation A
+			INNER JOIN dbo.LoadingItemLotRecord R ON R.LotSN=A.LotSN
+			INNER JOIN dbo.LoadingItemLotDetail D ON D.LoadingItemLotDetailId=R.LoadingItemLotDetailId
+			WHERE D.LoadingItemLotId=@LoadingItemLotId AND A.MOId=@MOId
+				AND A.MOItemId=D.MOItemId AND A.DeleteFlag='0' AND A.IsOccupyAllocatedQty=1
 
 			SELECT @MOItemTaskName=MOItemTaskName FROM dbo.MOItemTask WHERE @MOItemTaskId= MOItemTaskId 
             SELECT 

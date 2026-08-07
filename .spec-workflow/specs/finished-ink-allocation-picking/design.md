@@ -24,9 +24,13 @@ flowchart LR
 
 设计原则：
 - 扫描准入改读预分配，不再读领料单批次。
-- 数量写入前必须校验预分配余额与剩余需求。
+- 预分配数量只用于批次准入和工单扫描库存校验，不限制实际使用数量。
+- 数量写入前必须校验批次库存可用量与剩余需求；实际使用确认后立即扣减对应库存。
+- 扫描工单时必须校验已分配批次库存覆盖分配数量；不足时由仓库重新分配。
+- 库存扣减、上料记录、批次跟踪和数据链必须在同一事务内完成。
 - 领料单在完工前生成，不在灌墨扫描时生成。
 - 释放占用保留历史，不做逻辑删除。
+- 需要废弃的既有 SQL 只添加注释使其不执行，不直接删除。
 
 ---
 
@@ -37,20 +41,36 @@ flowchart LR
 | 改造过程 | `MES/procedure/PDA_FPInkCheckInput.sql` | PDA 成品灌墨 DoEvent |
 | 预分配表 | `MES/table/MOSemiFinishedLotAllocation.sql` | 只读校验与完工释放 |
 | 上料记录 | `LoadingItemLot`、`LoadingItemLotDetail`、`LoadingItemLotRecord` | 实际使用量 |
+| 库存与批次追溯 | `WW_RMInventory`、`TxnBase_MLotTrack` | 扣减批次库存并记录库存变更轨迹 |
 | 投料数据链 | `DataChainAssyIssue` | 灌墨投料关联 |
 | 领料参考 | `MES/procedure/PDA_ProductionMakingSubmit.sql` L78–286 | `MakingComplete` 生成生产领料单 |
+| 上料写入参考 | `MES/procedure/PDA_ProductionMaking_LotSNScan.sql` L781–895 | `UsedQtyScan` 的库存扣减、批次跟踪、上料记录和数据链写入 |
 
 ---
 
 ## 3. 事件分支设计
 
-### 3.1 `InputScanDefocus` 墨水批次扫描
+### 3.1 `InputScanDefocus` 工单扫描
+
+**改造位置**：现有工单扫描成功、取得 `@MOId` 与工单物料明细之后（以实施时基线为准）。
+
+**新增逻辑**：
+1. 查询当前工单各物料的有效预分配记录，按 `MOItemId + ProductId + LotSN` 汇总分配 `Qty`。
+2. 对每个已分配物料批次，汇总 `WW_RMInventory` 中相同物料、批次且 `LotStatus='1' AND IsStorage=1` 的 `Qty`。
+3. 按工单物料比较“已分配批次库存总量”与“分配数量总量”。
+4. 若任一物料库存不足，返回 `ServerMessage`（含工单号、物料号），提示“当前分配批次库存不足，请仓库重新分配”，并 `RETURN -1`。
+
+**说明**：此校验用于发现分配后库存变动造成的无效分配；没有有效预分配记录的物料不在此处报错，仍由墨水批次扫描准入校验处理。
+
+### 3.2 `InputScanDefocus` 墨水批次扫描
 
 **改造位置**：原墨水扫描段（约 L828–898，以回退后基线为准）
 
-**移除逻辑**：
+**保留但禁用的既有逻辑**：
 - `PickingListItemLot` / `OrgLotSN` 的已领料校验
 - 基于领料数量的 `@BeginQty` 自动用量计算
+
+以上代码块保留在原位置并改为 SQL 注释；每段前注明“改由预分配批次准入/实时库存数量校验替代”，不得直接删除。
 
 **新增逻辑**：
 1. 校验 `WW_RMInventory` 批次在库。
@@ -58,7 +78,9 @@ flowchart LR
 3. 查询 `MOSemiFinishedLotAllocation` 有效占用分配。
 4. 计算：
    - `@MRemainQty = @MQtyRequired - @MActualQty`
-   - `@LotAvailableQty = SUM(分配Qty) - SUM(当前会话已用Qty)`
+   - `@LotAvailableQty = SUM(WW_RMInventory.Qty)`
+   - 不以 `MOSemiFinishedLotAllocation.Qty` 限制实际使用数量。
+   - 不再减当前会话的 `LoadingItemLotRecord.Qty`，因为该数量写入时已同步从库存扣除。
 5. 分支：
    - `@LotAvailableQty > @MRemainQty`：返回建议数量，`Command='MLotSNScan'`，不写库
    - 否则：`@UsedQty = @LotAvailableQty`，沿用现有自动写入逻辑
@@ -76,17 +98,23 @@ SET @I_ExceptionFieldName = 'InputNumber';
 RETURN 0;
 ```
 
-### 3.2 `InputNumberDefocus` + `Command='MLotSNScan'`
+### 3.3 `InputNumberDefocus` + `Command='MLotSNScan'`
 
 **改造位置**：原数量确认段（约 L1318–1588）
 
 **新增校验**：
-1. 重新计算 `@LotAvailableQty` 与 `@MRemainQty`。
+1. 重新计算库存口径的 `@LotAvailableQty` 与 `@MRemainQty`。
 2. 校验 `@InputNumber` 为合法数字且 `> 0`。
 3. 校验 `@UsedQty <= @LotAvailableQty` 且 `@UsedQty <= @MRemainQty`。
-4. 通过后写入 `LoadingItemLotDetail`、`LoadingItemLotRecord`、`DataChainAssyIssue`。
+4. 通过后按 `PDA_ProductionMaking_LotSNScan` 的 `UsedQtyScan` 分支开启上料事务，写入下述数据。
+   - 更新 `LoadingItemLotDetail.ActualQty`。
+   - 按当前批次 `WWId` 扣减 `WW_RMInventory.Qty`，扣减前再次校验库存余额。
+   - 调用 `TxnBase_MLotTrack`，记录扣减前库存、本次上料数量、扣减后库存及工单号。
+   - 生成并插入 `LoadingItemLotRecord`。
+   - 调用 `TxnBase_DataChainMainLine`，生成并插入 `DataChainAssyIssue`。
+5. 自动写入路径复用同一写入单元，确保自动写入和数量确认的库存、追溯与数据链口径完全一致。
 
-### 3.3 自动完工
+### 3.4 自动完工
 
 **改造位置**：原 `@MQtyRequired <= @MActualQty + @UsedQty` 分支（约 L1092–1283）
 
@@ -99,7 +127,7 @@ RETURN 0;
 4. UPDATE MOSemiFinishedLotAllocation SET IsOccupyAllocatedQty=0
 ```
 
-### 3.4 `CMDLOTMOVE` 手工下线
+### 3.5 `CMDLOTMOVE` 手工下线
 
 **改造位置**：原 `@Command='CMDLOTMOVE'` 分支（约 L1596–1785）
 
@@ -107,32 +135,55 @@ RETURN 0;
 
 ---
 
-## 4. 数量口径
+## 4. 数量与库存校验口径
 
 ```sql
 -- 工单物料剩余需求
 @MRemainQty = ISNULL(@MQtyRequired, 0) - ISNULL(@MActualQty, 0)
 
--- 当前批次预分配占用总量
+-- 扫描工单时：当前物料批次预分配总量
 @LotAllocatedQty = SUM(Qty)
 FROM MOSemiFinishedLotAllocation
 WHERE MOId = @MOId
-  AND MOItemId = @IssueMOItemId
-  AND ProductId = @MProductId
-  AND LotSN = @InputScan
   AND DeleteFlag = '0'
   AND IsOccupyAllocatedQty = 1
 
--- 当前上料会话已使用量
-@LotUsedQty = SUM(LoadingItemLotRecord.Qty)
-FROM LoadingItemLotRecord
-INNER JOIN LoadingItemLotDetail ...
-WHERE LoadingItemLotId = @LoadingItemLotId
-  AND MOItemId = @IssueMOItemId
+-- 扫描工单时：同一物料与已分配批次的实际在库总量
+@AllocatedLotStockQty = SUM(WW_RMInventory.Qty)
+FROM #AllocatedLots AllocatedLot
+INNER JOIN WW_RMInventory ON ...
+WHERE WW_RMInventory.LotStatus = '1'
+  AND WW_RMInventory.IsStorage = 1
+
+-- 工单扫描校验
+@AllocatedLotStockQty >= @LotAllocatedQty
+
+-- 墨水批次扫描时：当前批次实际在库数量
+@LotStockQty = SUM(WW_RMInventory.Qty)
+FROM WW_RMInventory
+WHERE ProductId = @MProductId
   AND LotSN = @InputScan
+  AND LotStatus = '1'
+  AND IsStorage = 1
 
 -- 当前批次可用量
-@LotAvailableQty = @LotAllocatedQty - @LotUsedQty
+@LotAvailableQty = @LotStockQty
+```
+
+`@LotAllocatedQty` 不参与墨水批次扫描和数量确认的使用数量上限计算；只要存在有效占用分配记录，该批次即可使用。`LoadingItemLotRecord` 写入时会同步扣减 `WW_RMInventory.Qty`，因此可用量不得再减当前会话已用数量，避免重复扣减。
+
+### 4.1 上料写入顺序
+
+自动写入与 `InputNumberDefocus` 确认写入均执行以下事务单元，逻辑参照 `PDA_ProductionMaking_LotSNScan` 的 `@I_Sender='UsedQtyScan'` 分支：
+
+```
+1. 重新校验 WW_RMInventory.Qty >= @UsedQty
+2. UPDATE LoadingItemLotDetail，累计 ActualQty
+3. UPDATE WW_RMInventory SET Qty = Qty - @UsedQty（按当前 WWId）
+4. EXEC TxnBase_MLotTrack，写入批次追踪
+5. INSERT LoadingItemLotRecord，写入本次上料记录
+6. EXEC TxnBase_DataChainMainLine 并 INSERT DataChainAssyIssue
+7. COMMIT；任一步失败则 ROLLBACK
 ```
 
 ---
@@ -180,12 +231,12 @@ WHERE Detail.LoadingItemLotId = @LoadingItemLotId
 
 | 步骤 | 事务范围 | 失败处理 |
 |---|---|---|
-| 扫描/数量确认写入 | 沿用现有单步写入 | 返回 `ServerMessage`，不写库 |
+| 扫描/数量确认写入 | `BEGIN TRANSACTION LOADING`：上料明细、库存扣减、批次跟踪、`LoadingItemLotRecord` 与 `DataChainAssyIssue` | 任一步失败即回滚全部写入并返回 `ServerMessage` |
 | 领料单生成 | `PDA_ProductionMakingSubmit` 内部 `BEGIN TRANSACTION PickingLot` | 回滚领料，`RETURN -1` |
 | 过站报工 | 既有 `TxnBase_LotMove` / `MOProductionOrder` | 返回错误，不释放占用 |
 | 占用释放 | 与完工成功同路径执行 | 仅在过站报工成功后更新 |
 
-**约束**：领料失败时不允许继续过站；过站失败时不释放预分配占用。
+**约束**：领料失败时不允许继续过站；过站失败时不释放预分配占用；库存扣减不得脱离上料记录、批次跟踪或数据链独立提交。
 
 ---
 
@@ -193,10 +244,11 @@ WHERE Detail.LoadingItemLotId = @LoadingItemLotId
 
 | 场景 | 提示示例 |
 |---|---|
+| 工单已分配批次库存不足 | `ServerMessage:[工单号][{MOName}][物料号][{ProductName}]当前分配批次库存不足，请仓库重新分配！` |
 | 未指定批次 | `ServerMessage:墨水批次【{LotSN}】未指定给工单【{MOName}】，请更换批次扫描！` |
-| 可用量不足 | `ServerMessage:墨水批次【{LotSN}】已无可用指定数量，请更换批次扫描！` |
+| 可用量不足 | `ServerMessage:墨水批次【{LotSN}】已无可用库存数量，请更换批次扫描！` |
 | 超量确认 | `ServerMessage:墨水批次【{LotSN}】可用数量大于剩余需求，请确认使用数量【{Qty}】` |
-| 数量非法 | `ServerMessage:输入数量【{InputNumber}】超过墨水批次【{LotSN}】可用指定数量或工单剩余需求，请重新输入` |
+| 数量非法 | `ServerMessage:输入数量【{InputNumber}】超过墨水批次【{LotSN}】可用库存数量或工单剩余需求，请重新输入` |
 
 ---
 

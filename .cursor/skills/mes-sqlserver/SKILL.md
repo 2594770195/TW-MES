@@ -84,6 +84,7 @@ END
 - 复杂 JOIN、事务边界、批量更新规则必须注释。
 - 参数含义用行尾 `--` 中文说明（与现有过程保持一致）。
 - 使用临时表（`#表名` 或 `INTO #表名`）时，在**创建或首次写入前**用中文注释写明该临时表的作用、存放内容及后续用途。
+- 临时变量（`DECLARE @变量名`）**第一次出现（声明）时**，必须用行尾 `--` 或上一行注释写明中文名称或用途；后续赋值/使用处可不重复备注。
 
 ```sql
 -- 【准备】#ResolvedStocktakeData：将 Excel 文本解析为 MES 主数据 ID，并保留行级错误原因
@@ -94,8 +95,16 @@ FROM dbo.TempStocktakeData s
 
 -- 【准备】#WarehouseList：本次盘点涉及的仓库清单，供按仓库独立事务循环处理
 CREATE TABLE #WarehouseList ( ... );
-```
 
+-- ✅ 临时变量首次声明时备注用途
+DECLARE @RemainQty DECIMAL(18, 6)   -- 剩余待分配数量
+DECLARE @LotSN NVARCHAR(50)        -- 当前处理的批次条码
+DECLARE @i INT                     -- 循环计数器
+
+-- ❌ 不推荐：声明时无备注，读者无法快速理解用途
+DECLARE @RemainQty DECIMAL(18, 6)
+DECLARE @x INT
+```
 ### 事务与错误
 
 - 多表写操作使用 `BEGIN TRAN` / `COMMIT` / `ROLLBACK`，按仓库或业务单元划分事务时注意注释范围。
@@ -188,7 +197,7 @@ WHERE ...
 2. **查参考** — 在 `MES/procedure/` 找同类过程作模板。
 3. **读 spec** — 有规格文档则严格按 requirements/design 实现。
 4. **写脚本** — 遵循本节规范，分段中文注释。
-5. **自检** — 字段名、主键类型、事务范围、参数化、错误返回（参数异常时 `@I_ReturnMessage` 是否带出具体参数值）、临时表注释是否说明用途；新增表是否已写入表级和字段级 `MS_Description` 说明；涉及 `WW_RMInventory` 时是否已按需加 `IsStorage=1`。
+5. **自检** — 字段名、主键类型、事务范围、参数化、错误返回（参数异常时 `@I_ReturnMessage` 是否带出具体参数值）、临时表注释是否说明用途、临时变量首次声明是否已备注名称/用途；新增表是否已写入表级和字段级 `MS_Description` 说明；涉及 `WW_RMInventory` 时是否已按需加 `IsStorage=1`。
 
 ## 输出要求
 

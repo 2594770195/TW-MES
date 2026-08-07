@@ -28,6 +28,17 @@ END
 UPDATE WW_RMInventory SET Qty = @Qty WHERE ...
 ```
 
+临时变量（`DECLARE @变量名`）第一次出现（声明）时，必须用行尾 `--` 或上一行注释写明中文名称或用途；后续赋值/使用处可不重复备注。
+
+```sql
+-- ✅ 首次声明时备注用途
+DECLARE @RemainQty DECIMAL(18, 6)   -- 剩余待分配数量
+DECLARE @LotSN NVARCHAR(50)        -- 当前处理的批次条码
+
+-- ❌ 声明时无备注
+DECLARE @RemainQty DECIMAL(18, 6)
+```
+
 ## 安全
 
 ```sql

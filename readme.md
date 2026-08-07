@@ -40,10 +40,12 @@
 完整规格见 `.spec-workflow/specs/finished-ink-allocation-picking/`（requirements / design / tasks）。
 
 - 灌墨扫描以 `MOSemiFinishedLotAllocation` 的有效占用记录作为准入条件，不再要求该批次已生成领料记录。
-- 批次可用量按“当前工单物料和批次的分配数量 - 当前上料会话实际使用数量”计算；使用数量不得超过分配余额或工单物料剩余需求。
+- 实际使用数量可超过分配数量，但批次必须为当前工单仍占用的已分配批次；批次可用量直接取当前库存 `WW_RMInventory.Qty`，且不得超过工单物料剩余需求。每次写入 `LoadingItemLotRecord` 时同步扣减对应库存，因此不再按当前会话已用数量重复扣减。
+- 上料写入在同一事务内完成库存扣减、`LoadingItemLotDetail` / `LoadingItemLotRecord`、`TxnBase_MLotTrack` 批次追溯和 `DataChainAssyIssue` 数据链记录，参考 `PDA_ProductionMaking_LotSNScan` 的 `UsedQtyScan` 分支。
+- 扫描工单时，当前已分配批次的库存总量必须覆盖分配数量；不足时阻断并提示仓库重新分配。
 - 批次可用量大于剩余需求时，PDA 先返回建议数量，操作员在 `InputNumberDefocus` 确认后才写入使用记录。
 - 自动完工或批次下线前，仅为当前上料会话的未领料记录生成生产领料单；过站报工成功后，将实际使用批次的分配记录设为不再占用已分配数量，历史记录保留。
-- 当前处于 spec 评审阶段，`PDA_FPInkCheckInput.sql` 尚未按新规格改造；spec 确认后再进入 SQL 实现。
+- `PDA_FPInkCheckInput.sql` 已完成 spec 任务 5–10 的脚本改造，尚待按任务 12–16 进行数据库回归测试及 DBA 审批部署。
 
 ## Web 应用
 
@@ -74,7 +76,7 @@
 
 - 所有 SQL 均按 SQL Server 语法编写，目标数据库为 OrBitMOMTestBack。
 - 表结构到 `MES/table/` 查找，存储过程到 `MES/procedure/` 查找。
-- 存储过程每段核心逻辑需要添加中文注释。
+- 存储过程每段核心逻辑需要添加中文注释；临时变量首次声明时需备注中文名称或用途。
 - 除 SELECT 外，其余 SQL 变更需经审批后再执行。
 - 禁止 SQL 字符串拼接，统一使用参数化查询。
 

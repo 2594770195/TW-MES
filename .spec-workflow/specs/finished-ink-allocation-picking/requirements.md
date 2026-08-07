@@ -16,7 +16,10 @@
 
 ### 1.2 目标
 - 灌墨扫描以预分配记录作为批次准入条件。
-- 按预分配余额与工单剩余需求控制实际使用数量。
+- 实际使用数量可超过预分配数量，但批次必须是当前工单已预分配且仍占用的批次。
+- 每次确认实际使用数量时，同步扣减对应批次库存，并写入完整批次追溯与上料数据链。
+- 按扣减后的库存可用量与工单剩余需求控制实际使用数量。
+- 扫描工单时校验当前已分配批次的库存是否覆盖分配数量；库存不足时要求仓库重新分配。
 - 批次可用量大于剩余需求时，由 PDA 数量框确认后再写入使用记录。
 - 自动完工或手工批次下线前，为当前上料会话生成生产领料单。
 - 完工成功后释放实际使用批次的预分配占用，保留历史记录。
@@ -42,30 +45,36 @@
 - [ ] 同一工单任务中重复扫描同一批次时阻断。
 - [ ] 未指定、已释放或不属于当前工单的批次返回包含批次号的 `ServerMessage` 并 `RETURN -1`。
 
-### F-002 批次可用量计算
-按预分配余额扣除当前上料会话已使用量，计算本次可灌墨数量。
+### F-002 扫描工单时校验分配批次库存
+扫描工单并取得当前工单的有效预分配记录后，按工单物料校验已分配批次的库存总量是否覆盖分配数量；不足时阻断灌墨，要求仓库重新分配。
 
 验收标准：
-- [ ] `批次可用量 = SUM(占用分配Qty) - SUM(当前LoadingItemLot中该批次已用Qty)`。
-- [ ] 占用分配仅统计 `DeleteFlag='0' AND IsOccupyAllocatedQty=1` 的记录。
-- [ ] 已用数量仅统计当前 `LoadingItemLotId` 下对应 `MOItemId + LotSN` 的 `LoadingItemLotRecord.Qty`。
+- [ ] 仅统计 `DeleteFlag='0' AND IsOccupyAllocatedQty=1` 的预分配记录。
+- [ ] 按 `MOItemId + ProductId + LotSN` 汇总预分配 `Qty`，避免同一批次存在多条分配记录时重复计算库存。
+- [ ] 按相同物料与批次读取 `WW_RMInventory` 中 `LotStatus='1' AND IsStorage=1` 的 `Qty` 并汇总。
+- [ ] 任一工单物料的已分配批次库存总量小于该物料的分配数量总量时，返回包含工单号和物料号的 `ServerMessage` 并 `RETURN -1`，提示“当前分配批次库存不足，请仓库重新分配”。
+- [ ] 无有效预分配记录的工单物料不参与本校验；后续扫描该物料批次时仍由 F-003 准入规则阻断。
+
+### F-003 扫描指定批次与可用量计算
+实际使用数量不受预分配数量限制；只要批次属于当前工单有效预分配记录，即可使用，但不得超过该批次当前库存可用量或工单物料剩余需求。库存会在每次实际使用记录写入时同步扣减，因此可用量直接取当前库存余额。
+
+验收标准：
+- [ ] 批次准入仍校验 `MOSemiFinishedLotAllocation` 中存在 `MOId + MOItemId + LotSN` 一致且 `DeleteFlag='0' AND IsOccupyAllocatedQty=1` 的记录，不校验本次使用量是否超过该记录的分配 `Qty`。
+- [ ] `批次可用量 = SUM(WW_RMInventory.Qty)`；仅统计当前物料、批次且 `LotStatus='1' AND IsStorage=1` 的库存余额。
+- [ ] 不再使用当前 `LoadingItemLotRecord` 的已用数量二次扣减，避免库存已扣减后重复扣减。
 - [ ] 批次可用量小于等于 0 或工单物料剩余需求小于等于 0 时阻断。
 
-### F-003 超量扫描数量确认
-当批次可用量大于工单物料剩余需求时，扫描阶段只返回建议数量，不写库。
-
-验收标准：
-- [ ] 扫描事件返回 `InputNumber=剩余需求`、`Command='MLotSNScan'`，并 `RETURN 0`。
-- [ ] 扫描阶段不写入 `LoadingItemLotDetail`、`LoadingItemLotRecord`、`DataChainAssyIssue`。
-- [ ] `InputNumberDefocus` 在 `Command='MLotSNScan'` 时重新计算余额并校验确认数量。
-- [ ] 确认数量合法后才写入实际使用记录与投料数据链。
-
-### F-004 可用量内自动写入
-当批次可用量小于或等于工单物料剩余需求时，维持现有扫描即写入行为。
+### F-004 实际使用写入、扣库存与追溯
+当批次可用量小于或等于工单物料剩余需求时，维持现有扫描即写入行为；无论扫描自动写入或数量确认写入，均须在同一事务内完成实际使用记录、库存扣减和批次追溯。
 
 验收标准：
 - [ ] 自动使用数量取当前批次可用量。
-- [ ] 写入 `LoadingItemLotDetail`、`LoadingItemLotRecord`、`DataChainAssyIssue`。
+- [ ] 更新 `LoadingItemLotDetail.ActualQty`，并插入 `LoadingItemLotRecord`。
+- [ ] 按扫描取得的库存主键 `WWId` 执行 `WW_RMInventory.Qty -= @UsedQty`；扣减前再次校验库存余额不少于 `@UsedQty`。
+- [ ] 调用 `TxnBase_MLotTrack` 写入批次跟踪，备注包含扣减前库存、本次上料数量、扣减后库存和工单号。
+- [ ] 调用 `TxnBase_DataChainMainLine` 并插入 `DataChainAssyIssue`，写入本次上料批次、物料、工单、工单物料和实际使用数量。
+- [ ] 上述写入逻辑参照 `PDA_ProductionMaking_LotSNScan` 的 `@I_Sender='UsedQtyScan'` 分支（约 L781–895），字段和调用参数以实现时表结构与现有过程为准。
+- [ ] 库存扣减、批次跟踪、上料记录和数据链任一步失败时，整体回滚，不保留部分写入。
 - [ ] 累计实际用量达到需求后可触发自动完工逻辑。
 
 ### F-005 完工前生成生产领料单
@@ -93,6 +102,8 @@
 
 - 有效分配记录：`MOSemiFinishedLotAllocation.DeleteFlag='0' AND IsOccupyAllocatedQty=1`。
 - 有效库存：`WW_RMInventory.LotStatus='1' AND IsStorage=1 AND Qty>0`。
+- 工单扫描库存校验：按 `MOItemId + ProductId + LotSN` 汇总分配 `Qty`，并按相同物料批次汇总库存 `Qty`；库存总量不得小于分配数量总量。
+- 灌墨批次可用量：直接取当前批次在库 `WW_RMInventory.Qty`；每次写入实际使用记录时同步扣减库存，不再减当前上料会话已用数量。预分配 `Qty` 只作为批次准入和工单扫描库存校验依据，不限制实际使用数量。
 - 工单物料剩余需求：沿用现有 `@MQtyRequired - @MActualQty` 口径。
 - 半成品范围：`Product.ProductClassify='2'`。
 - 错误提示：遵循 OrBit 规范，参数相关异常须带出具体参数值，格式 `ServerMessage:[字段名][参数值]描述`。
@@ -101,7 +112,10 @@
 
 ## 4. 风险与控制
 
-- 防止超分配使用：写入前重新计算批次可用量与剩余需求。
+- 防止超库存使用：写入前重新计算批次库存可用量与剩余需求。
+- 防止库存与上料记录不一致：库存扣减、批次跟踪、`LoadingItemLotRecord` 和 `DataChainAssyIssue` 必须在同一事务中写入或回滚。
+- 防止无库存分配：扫描工单时校验当前分配批次库存覆盖分配数量，不足时阻断并要求仓库重新分配。
+- 逻辑保留：实施中不再使用的既有校验或计算必须以 SQL 注释保留，并在注释前说明替换原因；不得直接删除。
 - 防止未领料即过站：领料单生成失败时不允许继续完工。
 - 防止误释放：仅释放当前会话实际使用批次对应的分配记录。
 - 防止字段猜测：实现前必须以 `MES/table/` 表结构为准。
