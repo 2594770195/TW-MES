@@ -6,9 +6,10 @@ GO
 -- Author:		<OrBit Team>
 -- Create date: <2026-07-07>
 -- Description:	成品工单半成品批次分配 DoMethod
--- Revision: 1.02
+-- Revision: 1.03
+-- Update comment: 需求数量改为净需求(ItemQtyRequired-ItemQtyIssued)，已发料数量不再纳入分配需求
 -- @I_Sender 分支说明：
---   GetMOProduct     查询工单半成品需求、已分配数量、剩余数量
+--   GetMOProduct     查询工单半成品净需求(ItemQtyRequired-ItemQtyIssued)、已分配数量、剩余数量
 --   GetInventory     查询半成品可分配批次库存
 --   GetAllocatedLots 查询当前工单已分配批次
 --   AssignLot        输入 LotSN 自动分配批次
@@ -103,9 +104,9 @@ BEGIN
 			pr.ProductName,
 			p.ProductDescription,
 			mi.UOMId,
-			CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0)) AS ItemQtyRequired,
+			CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0) - ISNULL(mi.ItemQtyIssued, 0)) AS ItemQtyRequired,
 			CONVERT(decimal(18, 8), ISNULL(alloc.AllocatedQty, 0)) AS 已分配数量,
-			CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0) - ISNULL(alloc.AllocatedQty, 0)) AS 未分配数量
+			CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0) - ISNULL(mi.ItemQtyIssued, 0) - ISNULL(alloc.AllocatedQty, 0)) AS 未分配数量
 			
 		FROM dbo.MOItem mi
 		INNER JOIN dbo.MO mo ON mo.MOId = mi.MOId
@@ -203,8 +204,7 @@ BEGIN
 	BEGIN
 		IF ISNULL(@MOItemId, '') = ''
 		BEGIN
-			SET @I_ReturnMessage = N'ServerMessage:请选择有效行!'
-			RETURN -1
+			RETURN 0
 		END
 
 		-- 【查询】返回当前工单有效分配记录及物料、库存位置信息
@@ -249,8 +249,7 @@ BEGIN
 		-- 【校验】工单物料行与批次号不能为空
 		IF ISNULL(@MOItemId, '') = ''
 		BEGIN
-			SET @I_ReturnMessage = N'ServerMessage:请选择有效半成品物料行!'
-			RETURN -1
+			RETURN 0
 		END
 
 		IF ISNULL(@BoxOrLotSN, '') = ''
@@ -265,7 +264,7 @@ BEGIN
 			@AssignMOName = mo.MOName,
 			@AssignProductId = mi.ProductId,
 			@AssignUOMId = mi.UOMId,
-			@RequiredQty = CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0))
+			@RequiredQty = CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0) - ISNULL(mi.ItemQtyIssued, 0))
 		FROM dbo.MOItem mi
 		INNER JOIN dbo.MO mo ON mo.MOId = mi.MOId
 		INNER JOIN dbo.Product p ON p.ProductId = mi.ProductId
@@ -326,7 +325,7 @@ BEGIN
 		BEGIN TRANSACTION AssignLot
 
 		-- 【计算】事务内重新计算工单物料剩余需求
-		SELECT @RemainQty = CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0) - ISNULL(alloc.AllocatedQty, 0))
+		SELECT @RemainQty = CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0) - ISNULL(mi.ItemQtyIssued, 0) - ISNULL(alloc.AllocatedQty, 0))
 		FROM dbo.MOItem mi 
 		LEFT JOIN (
 			SELECT
@@ -477,7 +476,7 @@ BEGIN
 			@AssignMOName = mo.MOName,
 			@AssignProductId = mi.ProductId,
 			@AssignUOMId = mi.UOMId,
-			@RequiredQty = CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0))
+			@RequiredQty = CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0) - ISNULL(mi.ItemQtyIssued, 0))
 		FROM dbo.MOItem mi
 		INNER JOIN dbo.MO mo ON mo.MOId = mi.MOId
 		INNER JOIN dbo.Product p ON p.ProductId = mi.ProductId
@@ -496,7 +495,7 @@ BEGIN
 		BEGIN TRANSACTION AutoAssign
 
 		-- 【计算】事务内重新计算工单物料剩余需求
-		SELECT @RemainQty = CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0) - ISNULL(alloc.AllocatedQty, 0))
+		SELECT @RemainQty = CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0) - ISNULL(mi.ItemQtyIssued, 0) - ISNULL(alloc.AllocatedQty, 0))
 		FROM dbo.MOItem mi
 		LEFT JOIN (
 			SELECT

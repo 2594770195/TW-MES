@@ -1,3 +1,7 @@
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
 -- =============================================
 -- Author:        <OrBit Team Orbchay HK0325 >
 -- Create date:   <2021/08/02 09:57:42:1539>
@@ -842,305 +846,305 @@ IF ISNULL(@PickingListName,'')=''
 			END
 
 
-
+            --20260713取消超发调拨的逻辑
 			--1.1如果有超发料，则需要“创建调拨单 和 寄存账记录”
-			IF EXISTS(SELECT 1 FROM dbo.PickingListItem A INNER JOIN PickingListItemLot B ON A.PickingListItemId=B.PickingListItemId 
-			INNER JOIN @PickingListMO C ON A.PickingListItemId=C.PickingListItemId
-			WHERE A.PickingListId=@PickingListId AND B.Qty<B.ActualPickQty AND A.DeleteFlag IN(NULL,'','0'))
-			BEGIN
-				--必须存在寄存仓
-				--IF ISNULL(@ToWarehouseId,'')=''
-				--BEGIN
-				--	 SET @I_ReturnMessage='ServerMessage:领料单['+@PickingListName+']存在超发物料，工厂【'+@FactoryName+'】没有指定寄存仓库？必须指定寄存仓库！'
-				--	 ROLLBACK TRANSACTION SplitLot
-				--	 RETURN -1
-				--END
+			-- IF EXISTS(SELECT 1 FROM dbo.PickingListItem A INNER JOIN PickingListItemLot B ON A.PickingListItemId=B.PickingListItemId 
+			-- INNER JOIN @PickingListMO C ON A.PickingListItemId=C.PickingListItemId
+			-- WHERE A.PickingListId=@PickingListId AND B.Qty<B.ActualPickQty AND A.DeleteFlag IN(NULL,'','0'))
+			-- BEGIN
+			-- 	--必须存在寄存仓
+			-- 	--IF ISNULL(@ToWarehouseId,'')=''
+			-- 	--BEGIN
+			-- 	--	 SET @I_ReturnMessage='ServerMessage:领料单['+@PickingListName+']存在超发物料，工厂【'+@FactoryName+'】没有指定寄存仓库？必须指定寄存仓库！'
+			-- 	--	 ROLLBACK TRANSACTION SplitLot
+			-- 	--	 RETURN -1
+			-- 	--END
 
-				--领料单确认操作时，超发部分物料转为超发料管理
-				DECLARE cursor1 CURSOR LOCAL FAST_FORWARD FOR  
-				SELECT A.PickingListItemId,A.ProductId,B.Qty,B.ActualPickQty,WorkcenterId,UOMId,B.LotSN
-				FROM dbo.PickingListItem A
-				INNER JOIN PickingListItemLot B ON A.PickingListItemId=B.PickingListItemId
-				INNER JOIN @PickingListMO C ON A.PickingListItemId=C.PickingListItemId
-				WHERE PickingListId=@PickingListId AND B.Qty<B.ActualPickQty AND A.DeleteFlag IN(NULL,'','0')
-				OPEN cursor1 
-				FETCH NEXT FROM cursor1 
-				INTO @PickingListItemId,@ProductId,@QtyRequired,@QtyIssued,@WarehouseId,@UOMId,@LotSN
-				WHILE @@FETCH_STATUS = 0 
-				BEGIN 
-					SET @ExceedQty=0
-					IF ISNULL(@QtyIssued,0)>ISNULL(@QtyRequired,0)
-					BEGIN
-						SET @ExceedQty=ISNULL(@QtyIssued,0)-ISNULL(@QtyRequired,0)
-					END 
+			-- 	--领料单确认操作时，超发部分物料转为超发料管理
+			-- 	DECLARE cursor1 CURSOR LOCAL FAST_FORWARD FOR  
+			-- 	SELECT A.PickingListItemId,A.ProductId,B.Qty,B.ActualPickQty,WorkcenterId,UOMId,B.LotSN
+			-- 	FROM dbo.PickingListItem A
+			-- 	INNER JOIN PickingListItemLot B ON A.PickingListItemId=B.PickingListItemId
+			-- 	INNER JOIN @PickingListMO C ON A.PickingListItemId=C.PickingListItemId
+			-- 	WHERE PickingListId=@PickingListId AND B.Qty<B.ActualPickQty AND A.DeleteFlag IN(NULL,'','0')
+			-- 	OPEN cursor1 
+			-- 	FETCH NEXT FROM cursor1 
+			-- 	INTO @PickingListItemId,@ProductId,@QtyRequired,@QtyIssued,@WarehouseId,@UOMId,@LotSN
+			-- 	WHILE @@FETCH_STATUS = 0 
+			-- 	BEGIN 
+			-- 		SET @ExceedQty=0
+			-- 		IF ISNULL(@QtyIssued,0)>ISNULL(@QtyRequired,0)
+			-- 		BEGIN
+			-- 			SET @ExceedQty=ISNULL(@QtyIssued,0)-ISNULL(@QtyRequired,0)
+			-- 		END 
 
-					--存在超发
-					IF ISNULL(@ExceedQty,0)>0
-					BEGIN
-						SELECT @WarehouseId=WorkcenterId,@BoxSN=BoxSN,@CellId=CellId FROM WW_RMInventory WHERE LotSN=@LotSN
-						IF @WarehouseId<>@ToWarehouseId
-						BEGIN
-							--1.******产生调拨单********
-							SET @ProductAllotId=''
+			-- 		--存在超发
+			-- 		IF ISNULL(@ExceedQty,0)>0
+			-- 		BEGIN
+			-- 			SELECT @WarehouseId=WorkcenterId,@BoxSN=BoxSN,@CellId=CellId FROM WW_RMInventory WHERE LotSN=@LotSN
+			-- 			IF @WarehouseId<>@ToWarehouseId
+			-- 			BEGIN
+			-- 				--1.******产生调拨单********
+			-- 				SET @ProductAllotId=''
 
-							SELECT @ProductAllotId=ProductAllotId
-							FROM dbo.ProductAllot
-							WHERE PickingListId=@PickingListId
-							AND WorkcenterId=@WarehouseId AND ToWorkcenterId=@ToWarehouseId
-							AND ProductAllotStates='30' --状态取已确认的
-							AND CreateWay='1' AND ToErpLock=0
+			-- 				SELECT @ProductAllotId=ProductAllotId
+			-- 				FROM dbo.ProductAllot
+			-- 				WHERE PickingListId=@PickingListId
+			-- 				AND WorkcenterId=@WarehouseId AND ToWorkcenterId=@ToWarehouseId
+			-- 				AND ProductAllotStates='30' --状态取已确认的
+			-- 				AND CreateWay='1' AND ToErpLock=0
 
-							IF ISNULL(@ProductAllotId,'')=''
-							BEGIN
-								--申请单据
-								EXEC [dbo].[Txn_BillNewSN]
-									@BillName = N'ProductAllot', --Bill表
-									@NewSN = @ProductAllotName output
+			-- 				IF ISNULL(@ProductAllotId,'')=''
+			-- 				BEGIN
+			-- 					--申请单据
+			-- 					EXEC [dbo].[Txn_BillNewSN]
+			-- 						@BillName = N'ProductAllot', --Bill表
+			-- 						@NewSN = @ProductAllotName output
 
-								--申请主键
-								EXEC dbo.SysGetObjectPKId '','ProductAllot',@ProductAllotId OUTPUT
-							   INSERT INTO dbo.ProductAllot
-									(
-										ProductAllotId,
-										ProductAllotName,
-										ProductAllotDescription,
-										ProductAllotStates,
-										ProductAllotType,
-										FactoryId,
-										ToFactoryId,
-										WorkcenterId,
-										ToWorkcenterId,
-										ConfirmUserId,
-										ConfirmDate,
-										ApproveUserId,
-										ApproveDate,
-										PickingListId,
-										OperateWay,
-										CreateWay,
-										CreateUserId,
-										CreateDate,
-										ModifyDate
-									)
-							   VALUES
-									(
-										@ProductAllotId,
-										@ProductAllotName,
-										'领料单['+@PickingListName+']超发产生调拨单，调拨到线边仓',
-										'30',
-										'',
-										@FactoryId,
-										@FactoryId,
-										@WarehouseId,
-										@ToWarehouseId,
-										@I_OrBitUserId,
-										GETDATE(),
-										@I_OrBitUserId,
-										GETDATE(),
-										@PickingListId,
-										'0',
-										'1',
-										@I_OrBitUserId,
-										GETDATE(),
-										GETDATE()
-									)
-							END
+			-- 					--申请主键
+			-- 					EXEC dbo.SysGetObjectPKId '','ProductAllot',@ProductAllotId OUTPUT
+			-- 				   INSERT INTO dbo.ProductAllot
+			-- 						(
+			-- 							ProductAllotId,
+			-- 							ProductAllotName,
+			-- 							ProductAllotDescription,
+			-- 							ProductAllotStates,
+			-- 							ProductAllotType,
+			-- 							FactoryId,
+			-- 							ToFactoryId,
+			-- 							WorkcenterId,
+			-- 							ToWorkcenterId,
+			-- 							ConfirmUserId,
+			-- 							ConfirmDate,
+			-- 							ApproveUserId,
+			-- 							ApproveDate,
+			-- 							PickingListId,
+			-- 							OperateWay,
+			-- 							CreateWay,
+			-- 							CreateUserId,
+			-- 							CreateDate,
+			-- 							ModifyDate
+			-- 						)
+			-- 				   VALUES
+			-- 						(
+			-- 							@ProductAllotId,
+			-- 							@ProductAllotName,
+			-- 							'领料单['+@PickingListName+']超发产生调拨单，调拨到线边仓',
+			-- 							'30',
+			-- 							'',
+			-- 							@FactoryId,
+			-- 							@FactoryId,
+			-- 							@WarehouseId,
+			-- 							@ToWarehouseId,
+			-- 							@I_OrBitUserId,
+			-- 							GETDATE(),
+			-- 							@I_OrBitUserId,
+			-- 							GETDATE(),
+			-- 							@PickingListId,
+			-- 							'0',
+			-- 							'1',
+			-- 							@I_OrBitUserId,
+			-- 							GETDATE(),
+			-- 							GETDATE()
+			-- 						)
+			-- 				END
 
-							IF EXISTS(SELECT 1 FROM dbo.ProductAllotItem WHERE ProductAllotId=@ProductAllotId AND ProductId=@ProductId)
-							BEGIN
-								UPDATE dbo.ProductAllotItem SET 
-									   RealAllotQty=ISNULL(RealAllotQty,0)+@ExceedQty,
-									   AllotQty=ISNULL(RealAllotQty,0)+@ExceedQty
-								WHERE ProductAllotId=@ProductAllotId AND ProductId=@ProductId
-							END
-							ELSE
-							BEGIN
-								-- 获取调拨单行号
-								IF EXISTS(SELECT 1 FROM ProductAllotItem WHERE ProductAllotId=@ProductAllotId)
-									SELECT
-										@ItemSequence = RIGHT('000'+CAST(MAX(CAST(ItemSequence AS INT))+1  AS VARCHAR),4)
-									FROM ProductAllotItem
-									WHERE ProductAllotId = @ProductAllotId
-								ELSE
-									SET @ItemSequence = RIGHT('000'+CAST(1 AS VARCHAR),4)
-								--申请主键
-								EXEC dbo.SysGetObjectPKId '','ProductAllotItem',@ProductAllotItemId OUTPUT
-								INSERT INTO dbo.ProductAllotItem
-									 (
-										 ProductAllotItemId,
-										 ProductAllotId,
-										 ItemSequence,
-										 ProductId,
-										 AllotQty,
-										 RealAllotQty,
-										 ItemUOMId,
-										 CreateDate,
-										 ModifyDate
-									 )
-								VALUES
-									 (
-										 @ProductAllotItemId,
-										 @ProductAllotId,
-										 @ItemSequence,
-										 @ProductId,
-										 @ExceedQty,
-										 @ExceedQty,
-										 @UOMId,
-										 GETDATE(),
-										 GETDATE()
-									 )
+			-- 				IF EXISTS(SELECT 1 FROM dbo.ProductAllotItem WHERE ProductAllotId=@ProductAllotId AND ProductId=@ProductId)
+			-- 				BEGIN
+			-- 					UPDATE dbo.ProductAllotItem SET 
+			-- 						   RealAllotQty=ISNULL(RealAllotQty,0)+@ExceedQty,
+			-- 						   AllotQty=ISNULL(RealAllotQty,0)+@ExceedQty
+			-- 					WHERE ProductAllotId=@ProductAllotId AND ProductId=@ProductId
+			-- 				END
+			-- 				ELSE
+			-- 				BEGIN
+			-- 					-- 获取调拨单行号
+			-- 					IF EXISTS(SELECT 1 FROM ProductAllotItem WHERE ProductAllotId=@ProductAllotId)
+			-- 						SELECT
+			-- 							@ItemSequence = RIGHT('000'+CAST(MAX(CAST(ItemSequence AS INT))+1  AS VARCHAR),4)
+			-- 						FROM ProductAllotItem
+			-- 						WHERE ProductAllotId = @ProductAllotId
+			-- 					ELSE
+			-- 						SET @ItemSequence = RIGHT('000'+CAST(1 AS VARCHAR),4)
+			-- 					--申请主键
+			-- 					EXEC dbo.SysGetObjectPKId '','ProductAllotItem',@ProductAllotItemId OUTPUT
+			-- 					INSERT INTO dbo.ProductAllotItem
+			-- 						 (
+			-- 							 ProductAllotItemId,
+			-- 							 ProductAllotId,
+			-- 							 ItemSequence,
+			-- 							 ProductId,
+			-- 							 AllotQty,
+			-- 							 RealAllotQty,
+			-- 							 ItemUOMId,
+			-- 							 CreateDate,
+			-- 							 ModifyDate
+			-- 						 )
+			-- 					VALUES
+			-- 						 (
+			-- 							 @ProductAllotItemId,
+			-- 							 @ProductAllotId,
+			-- 							 @ItemSequence,
+			-- 							 @ProductId,
+			-- 							 @ExceedQty,
+			-- 							 @ExceedQty,
+			-- 							 @UOMId,
+			-- 							 GETDATE(),
+			-- 							 GETDATE()
+			-- 						 )
 
-								--生成调拨明细批次
+			-- 					--生成调拨明细批次
 						
-								EXEC SysGetObjectPKId '','ProductAllotItemLot',@ItemLotPKId OUTPUT
-								INSERT INTO [dbo].[ProductAllotItemLot]
-												([ProductAllotItemLotId]
-												,[ProductAllotItemId]
-												,[LotSN]
-												,[BoxSN]
-												,[Qty]
-												,[CellId]
-												,[ToCellId]
-												,[IsAOScan]
-												,[IsAEScan]
-												,[AllotType]
-												,[CreateUserId]
-												,[MOProductionLotId])
-											VALUES
-												(@ItemLotPKId
-												,@ProductAllotItemId
-												,@LotSN
-												,@BoxSN
-												,@ExceedQty
-												,@CellId
-												,NULL
-												,0
-												,0
-												,'R'
-												,@I_OrBitUserId
-												,'')
-							END
+			-- 					EXEC SysGetObjectPKId '','ProductAllotItemLot',@ItemLotPKId OUTPUT
+			-- 					INSERT INTO [dbo].[ProductAllotItemLot]
+			-- 									([ProductAllotItemLotId]
+			-- 									,[ProductAllotItemId]
+			-- 									,[LotSN]
+			-- 									,[BoxSN]
+			-- 									,[Qty]
+			-- 									,[CellId]
+			-- 									,[ToCellId]
+			-- 									,[IsAOScan]
+			-- 									,[IsAEScan]
+			-- 									,[AllotType]
+			-- 									,[CreateUserId]
+			-- 									,[MOProductionLotId])
+			-- 								VALUES
+			-- 									(@ItemLotPKId
+			-- 									,@ProductAllotItemId
+			-- 									,@LotSN
+			-- 									,@BoxSN
+			-- 									,@ExceedQty
+			-- 									,@CellId
+			-- 									,NULL
+			-- 									,0
+			-- 									,0
+			-- 									,'R'
+			-- 									,@I_OrBitUserId
+			-- 									,'')
+			-- 				END
 
-						END
+			-- 			END
 					
 
 
-						--2.******产生寄存账********
-						SET @ExceedPickingId=''
+			-- 			--2.******产生寄存账********
+			-- 			SET @ExceedPickingId=''
 
-						SELECT @ExceedPickingId=ExceedPickingId 
-						FROM dbo.ExceedPicking 
-						WHERE ProductId=@ProductId AND FactoryId=@FactoryId
-						AND DivisionId=@DivisionId AND WarehouseId=@ToWarehouseId
-						AND WorkcenterId=@ToWorkcenterId AND VendorId=@VendorId
+			-- 			SELECT @ExceedPickingId=ExceedPickingId 
+			-- 			FROM dbo.ExceedPicking 
+			-- 			WHERE ProductId=@ProductId AND FactoryId=@FactoryId
+			-- 			AND DivisionId=@DivisionId AND WarehouseId=@ToWarehouseId
+			-- 			AND WorkcenterId=@ToWorkcenterId AND VendorId=@VendorId
 
-						IF ISNULL(@ExceedPickingId,'')=''
-						BEGIN
-							EXEC dbo.SysGetObjectPKId '','ExceedPicking',@ExceedPickingId OUTPUT
-							INSERT INTO dbo.ExceedPicking
-								 (
-									 ExceedPickingId,
-									 ProductId,
-									 BeginExceedQty,
-									 SurplusExceedQty,
-									 FactoryId,
-									 DivisionId,
-									 WarehouseId,
-									 WorkcenterId,
-									 VendorId,
-									 CreateDate,
-									 ModifyDate
-								 )
-							VALUES
-								 (
-									 @ExceedPickingId,
-									 @ProductId,
-									 @ExceedQty,
-									 @ExceedQty,
-									 @FactoryId,
-									 @DivisionId,
-									 @ToWarehouseId,
-									 @ToWorkcenterId,
-									 @VendorId,
-									 GETDATE(),
-									 GETDATE()
-								 )
-						END
-						ELSE
-						BEGIN
-							--更新超发数量
-							UPDATE dbo.ExceedPicking SET 
-								BeginExceedQty=ISNULL(BeginExceedQty,0)+@ExceedQty,
-								SurplusExceedQty=ISNULL(SurplusExceedQty,0)+@ExceedQty,
-								ModifyDate=GETDATE()
-							WHERE ExceedPickingId=@ExceedPickingId
-						END
+			-- 			IF ISNULL(@ExceedPickingId,'')=''
+			-- 			BEGIN
+			-- 				EXEC dbo.SysGetObjectPKId '','ExceedPicking',@ExceedPickingId OUTPUT
+			-- 				INSERT INTO dbo.ExceedPicking
+			-- 					 (
+			-- 						 ExceedPickingId,
+			-- 						 ProductId,
+			-- 						 BeginExceedQty,
+			-- 						 SurplusExceedQty,
+			-- 						 FactoryId,
+			-- 						 DivisionId,
+			-- 						 WarehouseId,
+			-- 						 WorkcenterId,
+			-- 						 VendorId,
+			-- 						 CreateDate,
+			-- 						 ModifyDate
+			-- 					 )
+			-- 				VALUES
+			-- 					 (
+			-- 						 @ExceedPickingId,
+			-- 						 @ProductId,
+			-- 						 @ExceedQty,
+			-- 						 @ExceedQty,
+			-- 						 @FactoryId,
+			-- 						 @DivisionId,
+			-- 						 @ToWarehouseId,
+			-- 						 @ToWorkcenterId,
+			-- 						 @VendorId,
+			-- 						 GETDATE(),
+			-- 						 GETDATE()
+			-- 					 )
+			-- 			END
+			-- 			ELSE
+			-- 			BEGIN
+			-- 				--更新超发数量
+			-- 				UPDATE dbo.ExceedPicking SET 
+			-- 					BeginExceedQty=ISNULL(BeginExceedQty,0)+@ExceedQty,
+			-- 					SurplusExceedQty=ISNULL(SurplusExceedQty,0)+@ExceedQty,
+			-- 					ModifyDate=GETDATE()
+			-- 				WHERE ExceedPickingId=@ExceedPickingId
+			-- 			END
 
-						--SELECT TOP 1 @LotSN=LotSN FROM PickingListItemLot WHERE PickingListItemId=@PickingListItemId ORDER BY CreateDate DESC
+			-- 			--SELECT TOP 1 @LotSN=LotSN FROM PickingListItemLot WHERE PickingListItemId=@PickingListItemId ORDER BY CreateDate DESC
 
-						EXEC dbo.SysGetObjectPKId '','ExceedPickingItem',@ExceedPickingItemId OUTPUT
-						INSERT INTO dbo.ExceedPickingItem(
-								ExceedPickingItemId,
-								ExceedPickingId,
-								PickingListId,
-								PickingListItemId,
-								ProductId,
-								ExceedQty,
-								LotSN
-								)
-							VALUES(
-								@ExceedPickingItemId,
-								@ExceedPickingId,
-								@PickingListId,
-								@PickingListItemId,
-								@ProductId,
-								@ExceedQty,
-								@LotSN
-								)
+			-- 			EXEC dbo.SysGetObjectPKId '','ExceedPickingItem',@ExceedPickingItemId OUTPUT
+			-- 			INSERT INTO dbo.ExceedPickingItem(
+			-- 					ExceedPickingItemId,
+			-- 					ExceedPickingId,
+			-- 					PickingListId,
+			-- 					PickingListItemId,
+			-- 					ProductId,
+			-- 					ExceedQty,
+			-- 					LotSN
+			-- 					)
+			-- 				VALUES(
+			-- 					@ExceedPickingItemId,
+			-- 					@ExceedPickingId,
+			-- 					@PickingListId,
+			-- 					@PickingListItemId,
+			-- 					@ProductId,
+			-- 					@ExceedQty,
+			-- 					@LotSN
+			-- 					)
 
-						--获取当前批次使用数量
-						--SELECT @PickingQty=SUM(C.Qty) FROM PickingList A
-						--INNER JOIN PickingListItem B ON A.PickingListId=B.PickingListId
-						--INNER JOIN PickingListItemLot C ON B.PickingListItemId=C.PickingListItemId
-						--WHERE B.PickingListId=@PickingListId AND C.LotSN=@LotSN AND B.DeleteFlag IN(NULL,'','0')
+			-- 			--获取当前批次使用数量
+			-- 			--SELECT @PickingQty=SUM(C.Qty) FROM PickingList A
+			-- 			--INNER JOIN PickingListItem B ON A.PickingListId=B.PickingListId
+			-- 			--INNER JOIN PickingListItemLot C ON B.PickingListItemId=C.PickingListItemId
+			-- 			--WHERE B.PickingListId=@PickingListId AND C.LotSN=@LotSN AND B.DeleteFlag IN(NULL,'','0')
 
-						--IF ISNULL(@PickingQty,0)>0
-						--BEGIN
-						--	--拆分批次
-						--	EXEC @return_value = [dbo].[StartRuleSNDoMethod]
-						--			@I_ReturnMessage = @I_ReturnMessage OUTPUT,
-						--			@SNRuleId = @SNRuleId,
-						--			@RCharStr = N'',
-						--			@JumpQty=1,
-						--			@NewSN = @NewLotSN OUTPUT
+			-- 			--IF ISNULL(@PickingQty,0)>0
+			-- 			--BEGIN
+			-- 			--	--拆分批次
+			-- 			--	EXEC @return_value = [dbo].[StartRuleSNDoMethod]
+			-- 			--			@I_ReturnMessage = @I_ReturnMessage OUTPUT,
+			-- 			--			@SNRuleId = @SNRuleId,
+			-- 			--			@RCharStr = N'',
+			-- 			--			@JumpQty=1,
+			-- 			--			@NewSN = @NewLotSN OUTPUT
 
-						--	EXEC @return_value=[dbo].[PDA_LotSplitToEmptyLot]
-						--	@I_ReturnMessage=@I_ReturnMessage OUTPUT,
-						--	@I_PlugInCommand=@I_PlugInCommand,
-						--	@I_OrBitUserId=@I_OrBitUserId,
-						--	@I_ResourceId=@I_ResourceId,
-						--	@SplitLotSN=@LotSN,
-						--	@SplitQty=@PickingQty,
-						--	@CombineLotSN=@NewLotSN
+			-- 			--	EXEC @return_value=[dbo].[PDA_LotSplitToEmptyLot]
+			-- 			--	@I_ReturnMessage=@I_ReturnMessage OUTPUT,
+			-- 			--	@I_PlugInCommand=@I_PlugInCommand,
+			-- 			--	@I_OrBitUserId=@I_OrBitUserId,
+			-- 			--	@I_ResourceId=@I_ResourceId,
+			-- 			--	@SplitLotSN=@LotSN,
+			-- 			--	@SplitQty=@PickingQty,
+			-- 			--	@CombineLotSN=@NewLotSN
 
-						--	UPDATE C SET C.LotSN=@NewLotSN,OrgLotSN=@LotSN FROM PickingList A
-						--	INNER JOIN PickingListItem B ON A.PickingListId=B.PickingListId
-						--	INNER JOIN PickingListItemLot C ON B.PickingListItemId=C.PickingListItemId
-						--	WHERE B.PickingListId=@PickingListId AND C.LotSN=@LotSN AND B.DeleteFlag IN(NULL,'','0') 
+			-- 			--	UPDATE C SET C.LotSN=@NewLotSN,OrgLotSN=@LotSN FROM PickingList A
+			-- 			--	INNER JOIN PickingListItem B ON A.PickingListId=B.PickingListId
+			-- 			--	INNER JOIN PickingListItemLot C ON B.PickingListItemId=C.PickingListItemId
+			-- 			--	WHERE B.PickingListId=@PickingListId AND C.LotSN=@LotSN AND B.DeleteFlag IN(NULL,'','0') 
 
-						--	IF @return_value<>0
-						--	BEGIN
-						--		ROLLBACK TRANSACTION SplitLot
-						--		RETURN @return_value
-						--	END
-						--END
-					END
+			-- 			--	IF @return_value<>0
+			-- 			--	BEGIN
+			-- 			--		ROLLBACK TRANSACTION SplitLot
+			-- 			--		RETURN @return_value
+			-- 			--	END
+			-- 			--END
+			-- 		END
 
-					FETCH NEXT FROM cursor1 
-					INTO @PickingListItemId,@ProductId,@QtyRequired,@QtyIssued,@WarehouseId,@UOMId,@LotSN
-				END
-				CLOSE cursor1 
-				DEALLOCATE cursor1
-			END
+			-- 		FETCH NEXT FROM cursor1 
+			-- 		INTO @PickingListItemId,@ProductId,@QtyRequired,@QtyIssued,@WarehouseId,@UOMId,@LotSN
+			-- 	END
+			-- 	CLOSE cursor1 
+			-- 	DEALLOCATE cursor1
+			-- END
 
 			--1.2如果非杂发单，则更新工单 或 采购单 的物料明细的发料数
 			IF @PickingListClass NOT IN('02')
@@ -1207,27 +1211,28 @@ IF ISNULL(@PickingListName,'')=''
 				BEGIN
 					IF NOT EXISTS(SELECT 1 FROM PickingListItemLot A INNER JOIN PickingListItem B ON A.PickingListItemId=B.PickingListItemId WHERE B.PickingListId=@PickingListId AND A.LotSN=@OrgLotSN)
 					BEGIN
+                        --20260713取消超发调拨的逻辑
 						--获取建议储位
-						EXEC @return_value=dbo.TxnBase_MAdviceCell
-							 @I_ReturnMessage=@I_ReturnMessage OUTPUT, -- nvarchar(max)
-							 @I_OrBitUserId=@I_OrBitUserId, -- char(12)
-							 @I_OrBitUserName=@I_OrBitUserName, -- nvarchar(100)
-							 @I_ResourceId=@I_ResourceId, -- char(12)
-							 @I_ResourceName=@I_ResourceName, -- nvarchar(100)
-							 @I_PlugInCommand=@I_PlugInCommand, -- varchar(5)
-							 @AdviceWarehouseId=@ToWorkcenterId OUTPUT, -- char(12)
-							 @AdviceCellId=@AdviceCellId OUTPUT, -- char(12)
-							 @PreviousCellId='', -- char(12)
-							 @ToWarehosueId=@ToWorkcenterId, -- char(12)
-							 @SN=@OrgLotSN -- nvarchar(100)
+						-- EXEC @return_value=dbo.TxnBase_MAdviceCell
+						-- 	 @I_ReturnMessage=@I_ReturnMessage OUTPUT, -- nvarchar(max)
+						-- 	 @I_OrBitUserId=@I_OrBitUserId, -- char(12)
+						-- 	 @I_OrBitUserName=@I_OrBitUserName, -- nvarchar(100)
+						-- 	 @I_ResourceId=@I_ResourceId, -- char(12)
+						-- 	 @I_ResourceName=@I_ResourceName, -- nvarchar(100)
+						-- 	 @I_PlugInCommand=@I_PlugInCommand, -- varchar(5)
+						-- 	 @AdviceWarehouseId=@ToWorkcenterId OUTPUT, -- char(12)
+						-- 	 @AdviceCellId=@AdviceCellId OUTPUT, -- char(12)
+						-- 	 @PreviousCellId='', -- char(12)
+						-- 	 @ToWarehosueId=@ToWorkcenterId, -- char(12)
+						-- 	 @SN=@OrgLotSN -- nvarchar(100)
 
 						--库存移送到目标仓
 						UPDATE dbo.WW_RMInventory SET 
 							LotStatus='1',
-							IsStorage=1,
-							WorkcenterId=@ToWorkcenterId, --目标工作中心
-							CellId=@AdviceCellId,
-							IsExceedPicking=1
+							IsStorage=1
+                            -- ,WorkcenterId=@ToWorkcenterId, --目标工作中心
+							-- CellId=@AdviceCellId,
+							-- IsExceedPicking=1
 						WHERE LotSN=@OrgLotSN
 					END
 					
@@ -1334,302 +1339,303 @@ IF ISNULL(@PickingListName,'')=''
 				SET @RowId+=1;
 			END
 
+            --20260713取消超发调拨的逻辑
 			--1.1如果有超发料，则需要“创建调拨单 和 寄存账记录”
-			IF EXISTS(SELECT 1 FROM dbo.PickingListItem A INNER JOIN PickingListItemLot B ON A.PickingListItemId=B.PickingListItemId WHERE A.PickingListId=@PickingListId AND B.Qty<B.ActualPickQty AND A.DeleteFlag IN(NULL,'','0'))
-			BEGIN
-				--必须存在寄存仓
-				--IF ISNULL(@ToWarehouseId,'')=''
-				--BEGIN
-				--	 SET @I_ReturnMessage='ServerMessage:领料单['+@PickingListName+']存在超发物料，工厂【'+@FactoryName+'】没有指定寄存仓库？必须指定寄存仓库！'
-				--	 ROLLBACK TRANSACTION SplitLot
-				--	 RETURN -1
-				--END
+			-- IF EXISTS(SELECT 1 FROM dbo.PickingListItem A INNER JOIN PickingListItemLot B ON A.PickingListItemId=B.PickingListItemId WHERE A.PickingListId=@PickingListId AND B.Qty<B.ActualPickQty AND A.DeleteFlag IN(NULL,'','0'))
+			-- BEGIN
+			-- 	--必须存在寄存仓
+			-- 	--IF ISNULL(@ToWarehouseId,'')=''
+			-- 	--BEGIN
+			-- 	--	 SET @I_ReturnMessage='ServerMessage:领料单['+@PickingListName+']存在超发物料，工厂【'+@FactoryName+'】没有指定寄存仓库？必须指定寄存仓库！'
+			-- 	--	 ROLLBACK TRANSACTION SplitLot
+			-- 	--	 RETURN -1
+			-- 	--END
 
-				--领料单确认操作时，超发部分物料转为超发料管理
-				DECLARE cursor1 CURSOR LOCAL FAST_FORWARD FOR  
-				SELECT A.PickingListItemId,A.ProductId,B.Qty,B.ActualPickQty,WorkcenterId,UOMId,B.LotSN
-				FROM dbo.PickingListItem A
-				INNER JOIN PickingListItemLot B ON A.PickingListItemId=B.PickingListItemId
-				WHERE PickingListId=@PickingListId AND B.Qty<B.ActualPickQty AND A.DeleteFlag IN(NULL,'','0')
-				OPEN cursor1 
-				FETCH NEXT FROM cursor1 
-				INTO @PickingListItemId,@ProductId,@QtyRequired,@QtyIssued,@WarehouseId,@UOMId,@LotSN
-				WHILE @@FETCH_STATUS = 0 
-				BEGIN 
-					SET @ExceedQty=0
-					IF ISNULL(@QtyIssued,0)>ISNULL(@QtyRequired,0)
-					BEGIN
-						SET @ExceedQty=ISNULL(@QtyIssued,0)-ISNULL(@QtyRequired,0)
-					END 
+			-- 	--领料单确认操作时，超发部分物料转为超发料管理
+			-- 	DECLARE cursor1 CURSOR LOCAL FAST_FORWARD FOR  
+			-- 	SELECT A.PickingListItemId,A.ProductId,B.Qty,B.ActualPickQty,WorkcenterId,UOMId,B.LotSN
+			-- 	FROM dbo.PickingListItem A
+			-- 	INNER JOIN PickingListItemLot B ON A.PickingListItemId=B.PickingListItemId
+			-- 	WHERE PickingListId=@PickingListId AND B.Qty<B.ActualPickQty AND A.DeleteFlag IN(NULL,'','0')
+			-- 	OPEN cursor1 
+			-- 	FETCH NEXT FROM cursor1 
+			-- 	INTO @PickingListItemId,@ProductId,@QtyRequired,@QtyIssued,@WarehouseId,@UOMId,@LotSN
+			-- 	WHILE @@FETCH_STATUS = 0 
+			-- 	BEGIN 
+			-- 		SET @ExceedQty=0
+			-- 		IF ISNULL(@QtyIssued,0)>ISNULL(@QtyRequired,0)
+			-- 		BEGIN
+			-- 			SET @ExceedQty=ISNULL(@QtyIssued,0)-ISNULL(@QtyRequired,0)
+			-- 		END 
 
-					--存在超发
-					IF ISNULL(@ExceedQty,0)>0
-					BEGIN
-						SELECT @WarehouseId=WorkcenterId,@BoxSN=BoxSN,@CellId=CellId FROM WW_RMInventory WHERE LotSN=@LotSN
-						IF @WarehouseId<>@ToWarehouseId
-						BEGIN
-							--1.******产生调拨单********
-							SET @ProductAllotId=''
+			-- 		--存在超发
+			-- 		IF ISNULL(@ExceedQty,0)>0
+			-- 		BEGIN
+			-- 			SELECT @WarehouseId=WorkcenterId,@BoxSN=BoxSN,@CellId=CellId FROM WW_RMInventory WHERE LotSN=@LotSN
+			-- 			IF @WarehouseId<>@ToWarehouseId
+			-- 			BEGIN
+			-- 				--1.******产生调拨单********
+			-- 				SET @ProductAllotId=''
 
-							SELECT @ProductAllotId=ProductAllotId
-							FROM dbo.ProductAllot
-							WHERE PickingListId=@PickingListId
-							AND WorkcenterId=@WarehouseId AND ToWorkcenterId=@ToWarehouseId
-							AND ProductAllotStates='30' --状态取已确认的
-							AND CreateWay='1' AND ToErpLock=0
+			-- 				SELECT @ProductAllotId=ProductAllotId
+			-- 				FROM dbo.ProductAllot
+			-- 				WHERE PickingListId=@PickingListId
+			-- 				AND WorkcenterId=@WarehouseId AND ToWorkcenterId=@ToWarehouseId
+			-- 				AND ProductAllotStates='30' --状态取已确认的
+			-- 				AND CreateWay='1' AND ToErpLock=0
 
-							IF ISNULL(@ProductAllotId,'')=''
-							BEGIN
-								--申请单据
-								EXEC [dbo].[Txn_BillNewSN]
-									@BillName = N'ProductAllot', --Bill表
-									@NewSN = @ProductAllotName output
+			-- 				IF ISNULL(@ProductAllotId,'')=''
+			-- 				BEGIN
+			-- 					--申请单据
+			-- 					EXEC [dbo].[Txn_BillNewSN]
+			-- 						@BillName = N'ProductAllot', --Bill表
+			-- 						@NewSN = @ProductAllotName output
 
-								--申请主键
-								EXEC dbo.SysGetObjectPKId '','ProductAllot',@ProductAllotId OUTPUT
-							   INSERT INTO dbo.ProductAllot
-									(
-										ProductAllotId,
-										ProductAllotName,
-										ProductAllotDescription,
-										ProductAllotStates,
-										ProductAllotType,
-										FactoryId,
-										ToFactoryId,
-										WorkcenterId,
-										ToWorkcenterId,
-										ConfirmUserId,
-										ConfirmDate,
-										ApproveUserId,
-										ApproveDate,
-										PickingListId,
-										OperateWay,
-										CreateWay,
-										CreateUserId,
-										CreateDate,
-										ModifyDate
-									)
-							   VALUES
-									(
-										@ProductAllotId,
-										@ProductAllotName,
-										'领料单['+@PickingListName+']超发产生调拨单，调拨到线边仓',
-										'30',
-										'',
-										@FactoryId,
-										@FactoryId,
-										@WarehouseId,
-										@ToWarehouseId,
-										@I_OrBitUserId,
-										GETDATE(),
-										@I_OrBitUserId,
-										GETDATE(),
-										@PickingListId,
-										'0',
-										'1',
-										@I_OrBitUserId,
-										GETDATE(),
-										GETDATE()
-									)
-							END
+			-- 					--申请主键
+			-- 					EXEC dbo.SysGetObjectPKId '','ProductAllot',@ProductAllotId OUTPUT
+			-- 				   INSERT INTO dbo.ProductAllot
+			-- 						(
+			-- 							ProductAllotId,
+			-- 							ProductAllotName,
+			-- 							ProductAllotDescription,
+			-- 							ProductAllotStates,
+			-- 							ProductAllotType,
+			-- 							FactoryId,
+			-- 							ToFactoryId,
+			-- 							WorkcenterId,
+			-- 							ToWorkcenterId,
+			-- 							ConfirmUserId,
+			-- 							ConfirmDate,
+			-- 							ApproveUserId,
+			-- 							ApproveDate,
+			-- 							PickingListId,
+			-- 							OperateWay,
+			-- 							CreateWay,
+			-- 							CreateUserId,
+			-- 							CreateDate,
+			-- 							ModifyDate
+			-- 						)
+			-- 				   VALUES
+			-- 						(
+			-- 							@ProductAllotId,
+			-- 							@ProductAllotName,
+			-- 							'领料单['+@PickingListName+']超发产生调拨单，调拨到线边仓',
+			-- 							'30',
+			-- 							'',
+			-- 							@FactoryId,
+			-- 							@FactoryId,
+			-- 							@WarehouseId,
+			-- 							@ToWarehouseId,
+			-- 							@I_OrBitUserId,
+			-- 							GETDATE(),
+			-- 							@I_OrBitUserId,
+			-- 							GETDATE(),
+			-- 							@PickingListId,
+			-- 							'0',
+			-- 							'1',
+			-- 							@I_OrBitUserId,
+			-- 							GETDATE(),
+			-- 							GETDATE()
+			-- 						)
+			-- 				END
 
-							IF EXISTS(SELECT 1 FROM dbo.ProductAllotItem WHERE ProductAllotId=@ProductAllotId AND ProductId=@ProductId)
-							BEGIN
-								UPDATE dbo.ProductAllotItem SET 
-									   RealAllotQty=ISNULL(RealAllotQty,0)+@ExceedQty,
-									   AllotQty=ISNULL(RealAllotQty,0)+@ExceedQty
-								WHERE ProductAllotId=@ProductAllotId AND ProductId=@ProductId
-							END
-							ELSE
-							BEGIN
-								-- 获取调拨单行号
-								IF EXISTS(SELECT 1 FROM ProductAllotItem WHERE ProductAllotId=@ProductAllotId)
-									SELECT
-										@ItemSequence = RIGHT('000'+CAST(MAX(CAST(ItemSequence AS INT))+1  AS VARCHAR),4)
-									FROM ProductAllotItem
-									WHERE ProductAllotId = @ProductAllotId
-								ELSE
-									SET @ItemSequence = RIGHT('000'+CAST(1 AS VARCHAR),4)
-								--申请主键
-								EXEC dbo.SysGetObjectPKId '','ProductAllotItem',@ProductAllotItemId OUTPUT
-								INSERT INTO dbo.ProductAllotItem
-									 (
-										 ProductAllotItemId,
-										 ProductAllotId,
-										 ItemSequence,
-										 ProductId,
-										 AllotQty,
-										 RealAllotQty,
-										 ItemUOMId,
-										 CreateDate,
-										 ModifyDate
-									 )
-								VALUES
-									 (
-										 @ProductAllotItemId,
-										 @ProductAllotId,
-										 @ItemSequence,
-										 @ProductId,
-										 @ExceedQty,
-										 @ExceedQty,
-										 @UOMId,
-										 GETDATE(),
-										 GETDATE()
-									 )
+			-- 				IF EXISTS(SELECT 1 FROM dbo.ProductAllotItem WHERE ProductAllotId=@ProductAllotId AND ProductId=@ProductId)
+			-- 				BEGIN
+			-- 					UPDATE dbo.ProductAllotItem SET 
+			-- 						   RealAllotQty=ISNULL(RealAllotQty,0)+@ExceedQty,
+			-- 						   AllotQty=ISNULL(RealAllotQty,0)+@ExceedQty
+			-- 					WHERE ProductAllotId=@ProductAllotId AND ProductId=@ProductId
+			-- 				END
+			-- 				ELSE
+			-- 				BEGIN
+			-- 					-- 获取调拨单行号
+			-- 					IF EXISTS(SELECT 1 FROM ProductAllotItem WHERE ProductAllotId=@ProductAllotId)
+			-- 						SELECT
+			-- 							@ItemSequence = RIGHT('000'+CAST(MAX(CAST(ItemSequence AS INT))+1  AS VARCHAR),4)
+			-- 						FROM ProductAllotItem
+			-- 						WHERE ProductAllotId = @ProductAllotId
+			-- 					ELSE
+			-- 						SET @ItemSequence = RIGHT('000'+CAST(1 AS VARCHAR),4)
+			-- 					--申请主键
+			-- 					EXEC dbo.SysGetObjectPKId '','ProductAllotItem',@ProductAllotItemId OUTPUT
+			-- 					INSERT INTO dbo.ProductAllotItem
+			-- 						 (
+			-- 							 ProductAllotItemId,
+			-- 							 ProductAllotId,
+			-- 							 ItemSequence,
+			-- 							 ProductId,
+			-- 							 AllotQty,
+			-- 							 RealAllotQty,
+			-- 							 ItemUOMId,
+			-- 							 CreateDate,
+			-- 							 ModifyDate
+			-- 						 )
+			-- 					VALUES
+			-- 						 (
+			-- 							 @ProductAllotItemId,
+			-- 							 @ProductAllotId,
+			-- 							 @ItemSequence,
+			-- 							 @ProductId,
+			-- 							 @ExceedQty,
+			-- 							 @ExceedQty,
+			-- 							 @UOMId,
+			-- 							 GETDATE(),
+			-- 							 GETDATE()
+			-- 						 )
 
-								--生成调拨明细批次
+			-- 					--生成调拨明细批次
 						
-								EXEC SysGetObjectPKId '','ProductAllotItemLot',@ItemLotPKId OUTPUT
-								INSERT INTO [dbo].[ProductAllotItemLot]
-												([ProductAllotItemLotId]
-												,[ProductAllotItemId]
-												,[LotSN]
-												,[BoxSN]
-												,[Qty]
-												,[CellId]
-												,[ToCellId]
-												,[IsAOScan]
-												,[IsAEScan]
-												,[AllotType]
-												,[CreateUserId]
-												,[MOProductionLotId])
-											VALUES
-												(@ItemLotPKId
-												,@ProductAllotItemId
-												,@LotSN
-												,@BoxSN
-												,@ExceedQty
-												,@CellId
-												,NULL
-												,0
-												,0
-												,'R'
-												,@I_OrBitUserId
-												,'')
-							END
+			-- 					EXEC SysGetObjectPKId '','ProductAllotItemLot',@ItemLotPKId OUTPUT
+			-- 					INSERT INTO [dbo].[ProductAllotItemLot]
+			-- 									([ProductAllotItemLotId]
+			-- 									,[ProductAllotItemId]
+			-- 									,[LotSN]
+			-- 									,[BoxSN]
+			-- 									,[Qty]
+			-- 									,[CellId]
+			-- 									,[ToCellId]
+			-- 									,[IsAOScan]
+			-- 									,[IsAEScan]
+			-- 									,[AllotType]
+			-- 									,[CreateUserId]
+			-- 									,[MOProductionLotId])
+			-- 								VALUES
+			-- 									(@ItemLotPKId
+			-- 									,@ProductAllotItemId
+			-- 									,@LotSN
+			-- 									,@BoxSN
+			-- 									,@ExceedQty
+			-- 									,@CellId
+			-- 									,NULL
+			-- 									,0
+			-- 									,0
+			-- 									,'R'
+			-- 									,@I_OrBitUserId
+			-- 									,'')
+			-- 				END
 
-						END
+			-- 			END
 					
 
 
-						--2.******产生寄存账********
-						SET @ExceedPickingId=''
+			-- 			--2.******产生寄存账********
+			-- 			SET @ExceedPickingId=''
 
-						SELECT @ExceedPickingId=ExceedPickingId 
-						FROM dbo.ExceedPicking 
-						WHERE ProductId=@ProductId AND FactoryId=@FactoryId
-						AND DivisionId=@DivisionId AND WarehouseId=@ToWarehouseId
-						AND WorkcenterId=@ToWorkcenterId AND VendorId=@VendorId
+			-- 			SELECT @ExceedPickingId=ExceedPickingId 
+			-- 			FROM dbo.ExceedPicking 
+			-- 			WHERE ProductId=@ProductId AND FactoryId=@FactoryId
+			-- 			AND DivisionId=@DivisionId AND WarehouseId=@ToWarehouseId
+			-- 			AND WorkcenterId=@ToWorkcenterId AND VendorId=@VendorId
 
-						IF ISNULL(@ExceedPickingId,'')=''
-						BEGIN
-							EXEC dbo.SysGetObjectPKId '','ExceedPicking',@ExceedPickingId OUTPUT
-							INSERT INTO dbo.ExceedPicking
-								 (
-									 ExceedPickingId,
-									 ProductId,
-									 BeginExceedQty,
-									 SurplusExceedQty,
-									 FactoryId,
-									 DivisionId,
-									 WarehouseId,
-									 WorkcenterId,
-									 VendorId,
-									 CreateDate,
-									 ModifyDate
-								 )
-							VALUES
-								 (
-									 @ExceedPickingId,
-									 @ProductId,
-									 @ExceedQty,
-									 @ExceedQty,
-									 @FactoryId,
-									 @DivisionId,
-									 @ToWarehouseId,
-									 @ToWorkcenterId,
-									 @VendorId,
-									 GETDATE(),
-									 GETDATE()
-								 )
-						END
-						ELSE
-						BEGIN
-							--更新超发数量
-							UPDATE dbo.ExceedPicking SET 
-								BeginExceedQty=ISNULL(BeginExceedQty,0)+@ExceedQty,
-								SurplusExceedQty=ISNULL(SurplusExceedQty,0)+@ExceedQty,
-								ModifyDate=GETDATE()
-							WHERE ExceedPickingId=@ExceedPickingId
-						END
+			-- 			IF ISNULL(@ExceedPickingId,'')=''
+			-- 			BEGIN
+			-- 				EXEC dbo.SysGetObjectPKId '','ExceedPicking',@ExceedPickingId OUTPUT
+			-- 				INSERT INTO dbo.ExceedPicking
+			-- 					 (
+			-- 						 ExceedPickingId,
+			-- 						 ProductId,
+			-- 						 BeginExceedQty,
+			-- 						 SurplusExceedQty,
+			-- 						 FactoryId,
+			-- 						 DivisionId,
+			-- 						 WarehouseId,
+			-- 						 WorkcenterId,
+			-- 						 VendorId,
+			-- 						 CreateDate,
+			-- 						 ModifyDate
+			-- 					 )
+			-- 				VALUES
+			-- 					 (
+			-- 						 @ExceedPickingId,
+			-- 						 @ProductId,
+			-- 						 @ExceedQty,
+			-- 						 @ExceedQty,
+			-- 						 @FactoryId,
+			-- 						 @DivisionId,
+			-- 						 @ToWarehouseId,
+			-- 						 @ToWorkcenterId,
+			-- 						 @VendorId,
+			-- 						 GETDATE(),
+			-- 						 GETDATE()
+			-- 					 )
+			-- 			END
+			-- 			ELSE
+			-- 			BEGIN
+			-- 				--更新超发数量
+			-- 				UPDATE dbo.ExceedPicking SET 
+			-- 					BeginExceedQty=ISNULL(BeginExceedQty,0)+@ExceedQty,
+			-- 					SurplusExceedQty=ISNULL(SurplusExceedQty,0)+@ExceedQty,
+			-- 					ModifyDate=GETDATE()
+			-- 				WHERE ExceedPickingId=@ExceedPickingId
+			-- 			END
 
-						--SELECT TOP 1 @LotSN=LotSN FROM PickingListItemLot WHERE PickingListItemId=@PickingListItemId ORDER BY CreateDate DESC
+			-- 			--SELECT TOP 1 @LotSN=LotSN FROM PickingListItemLot WHERE PickingListItemId=@PickingListItemId ORDER BY CreateDate DESC
 
-						EXEC dbo.SysGetObjectPKId '','ExceedPickingItem',@ExceedPickingItemId OUTPUT
-						INSERT INTO dbo.ExceedPickingItem(
-								ExceedPickingItemId,
-								ExceedPickingId,
-								PickingListId,
-								PickingListItemId,
-								ProductId,
-								ExceedQty,
-								LotSN
-								)
-							VALUES(
-								@ExceedPickingItemId,
-								@ExceedPickingId,
-								@PickingListId,
-								@PickingListItemId,
-								@ProductId,
-								@ExceedQty,
-								@LotSN
-								)
+			-- 			EXEC dbo.SysGetObjectPKId '','ExceedPickingItem',@ExceedPickingItemId OUTPUT
+			-- 			INSERT INTO dbo.ExceedPickingItem(
+			-- 					ExceedPickingItemId,
+			-- 					ExceedPickingId,
+			-- 					PickingListId,
+			-- 					PickingListItemId,
+			-- 					ProductId,
+			-- 					ExceedQty,
+			-- 					LotSN
+			-- 					)
+			-- 				VALUES(
+			-- 					@ExceedPickingItemId,
+			-- 					@ExceedPickingId,
+			-- 					@PickingListId,
+			-- 					@PickingListItemId,
+			-- 					@ProductId,
+			-- 					@ExceedQty,
+			-- 					@LotSN
+			-- 					)
 
-						--获取当前批次使用数量
-						SELECT @PickingQty=SUM(C.Qty) FROM PickingList A
-						INNER JOIN PickingListItem B ON A.PickingListId=B.PickingListId
-						INNER JOIN PickingListItemLot C ON B.PickingListItemId=C.PickingListItemId
-						WHERE B.PickingListId=@PickingListId AND C.LotSN=@LotSN AND B.DeleteFlag IN(NULL,'','0')
+			-- 			--获取当前批次使用数量
+			-- 			SELECT @PickingQty=SUM(C.Qty) FROM PickingList A
+			-- 			INNER JOIN PickingListItem B ON A.PickingListId=B.PickingListId
+			-- 			INNER JOIN PickingListItemLot C ON B.PickingListItemId=C.PickingListItemId
+			-- 			WHERE B.PickingListId=@PickingListId AND C.LotSN=@LotSN AND B.DeleteFlag IN(NULL,'','0')
 
-						IF ISNULL(@PickingQty,0)>0
-						BEGIN
+			-- 			IF ISNULL(@PickingQty,0)>0
+			-- 			BEGIN
 
-							--拆分批次
-							EXEC @return_value = [dbo].[StartRuleSNDoMethod]
-									@I_ReturnMessage = @I_ReturnMessage OUTPUT,
-									@SNRuleId = @SNRuleId,
-									@RCharStr = N'',
-									@JumpQty=1,
-									@NewSN = @NewLotSN OUTPUT
+			-- 				--拆分批次
+			-- 				EXEC @return_value = [dbo].[StartRuleSNDoMethod]
+			-- 						@I_ReturnMessage = @I_ReturnMessage OUTPUT,
+			-- 						@SNRuleId = @SNRuleId,
+			-- 						@RCharStr = N'',
+			-- 						@JumpQty=1,
+			-- 						@NewSN = @NewLotSN OUTPUT
 
-							EXEC @return_value=[dbo].[PDA_LotSplitToEmptyLot]
-							@I_ReturnMessage=@I_ReturnMessage OUTPUT,
-							@I_PlugInCommand=@I_PlugInCommand,
-							@I_OrBitUserId=@I_OrBitUserId,
-							@I_ResourceId=@I_ResourceId,
-							@SplitLotSN=@LotSN,
-							@SplitQty=@PickingQty,
-							@CombineLotSN=@NewLotSN
+			-- 				EXEC @return_value=[dbo].[PDA_LotSplitToEmptyLot]
+			-- 				@I_ReturnMessage=@I_ReturnMessage OUTPUT,
+			-- 				@I_PlugInCommand=@I_PlugInCommand,
+			-- 				@I_OrBitUserId=@I_OrBitUserId,
+			-- 				@I_ResourceId=@I_ResourceId,
+			-- 				@SplitLotSN=@LotSN,
+			-- 				@SplitQty=@PickingQty,
+			-- 				@CombineLotSN=@NewLotSN
 
-							UPDATE C SET C.LotSN=@NewLotSN,OrgLotSN=@LotSN FROM PickingList A
-							INNER JOIN PickingListItem B ON A.PickingListId=B.PickingListId
-							INNER JOIN PickingListItemLot C ON B.PickingListItemId=C.PickingListItemId
-							WHERE B.PickingListId=@PickingListId AND C.LotSN=@LotSN AND B.DeleteFlag IN(NULL,'','0') 
+			-- 				UPDATE C SET C.LotSN=@NewLotSN,OrgLotSN=@LotSN FROM PickingList A
+			-- 				INNER JOIN PickingListItem B ON A.PickingListId=B.PickingListId
+			-- 				INNER JOIN PickingListItemLot C ON B.PickingListItemId=C.PickingListItemId
+			-- 				WHERE B.PickingListId=@PickingListId AND C.LotSN=@LotSN AND B.DeleteFlag IN(NULL,'','0') 
 
-							IF @return_value<>0
-							BEGIN
-								ROLLBACK TRANSACTION SplitLot
-								RETURN @return_value
-							END
-						END
-					END
+			-- 				IF @return_value<>0
+			-- 				BEGIN
+			-- 					ROLLBACK TRANSACTION SplitLot
+			-- 					RETURN @return_value
+			-- 				END
+			-- 			END
+			-- 		END
 
-					FETCH NEXT FROM cursor1 
-					INTO @PickingListItemId,@ProductId,@QtyRequired,@QtyIssued,@WarehouseId,@UOMId,@LotSN
-				END
-				CLOSE cursor1 
-				DEALLOCATE cursor1
-			END
+			-- 		FETCH NEXT FROM cursor1 
+			-- 		INTO @PickingListItemId,@ProductId,@QtyRequired,@QtyIssued,@WarehouseId,@UOMId,@LotSN
+			-- 	END
+			-- 	CLOSE cursor1 
+			-- 	DEALLOCATE cursor1
+			-- END
 
 			--1.2如果非杂发单，则更新工单 或 采购单 的物料明细的发料数
 			IF @PickingListClass NOT IN('02')
@@ -1692,40 +1698,45 @@ IF ISNULL(@PickingListName,'')=''
 				INNER JOIN ProductFamily D ON C.ProductFamilyId=D.ProductFamilyId
 				WHERE A.LotSN=@OrgLotSN AND D.ProductFamilyName NOT IN('102850','102855','102857','102858','102859'))
 				BEGIN
+                    --20260713取消超发调拨的逻辑
 					--获取建议储位
-					EXEC @return_value=dbo.TxnBase_MAdviceCell
-						 @I_ReturnMessage=@I_ReturnMessage OUTPUT, -- nvarchar(max)
-						 @I_OrBitUserId=@I_OrBitUserId, -- char(12)
-						 @I_OrBitUserName=@I_OrBitUserName, -- nvarchar(100)
-						 @I_ResourceId=@I_ResourceId, -- char(12)
-						 @I_ResourceName=@I_ResourceName, -- nvarchar(100)
-						 @I_PlugInCommand=@I_PlugInCommand, -- varchar(5)
-						 @AdviceWarehouseId=@ToWorkcenterId OUTPUT, -- char(12)
-						 @AdviceCellId=@AdviceCellId OUTPUT, -- char(12)
-						 @PreviousCellId='', -- char(12)
-						 @ToWarehosueId=@ToWorkcenterId, -- char(12)
-						 @SN=@OrgLotSN -- nvarchar(100)
+					-- EXEC @return_value=dbo.TxnBase_MAdviceCell
+					-- 	 @I_ReturnMessage=@I_ReturnMessage OUTPUT, -- nvarchar(max)
+					-- 	 @I_OrBitUserId=@I_OrBitUserId, -- char(12)
+					-- 	 @I_OrBitUserName=@I_OrBitUserName, -- nvarchar(100)
+					-- 	 @I_ResourceId=@I_ResourceId, -- char(12)
+					-- 	 @I_ResourceName=@I_ResourceName, -- nvarchar(100)
+					-- 	 @I_PlugInCommand=@I_PlugInCommand, -- varchar(5)
+					-- 	 @AdviceWarehouseId=@ToWorkcenterId OUTPUT, -- char(12)
+					-- 	 @AdviceCellId=@AdviceCellId OUTPUT, -- char(12)
+					-- 	 @PreviousCellId='', -- char(12)
+					-- 	 @ToWarehosueId=@ToWorkcenterId, -- char(12)
+					-- 	 @SN=@OrgLotSN -- nvarchar(100)
 
-					--库存移送到目标仓
-					IF @PickingListClass NOT IN('02')
-                    BEGIN
-                        UPDATE dbo.WW_RMInventory SET
-                            LotStatus='1',
-                            IsStorage=1,
-                            WorkcenterId=@ToWorkcenterId, --目标工作中心
-                            CellId=@AdviceCellId,
-                            IsExceedPicking=1
-                        WHERE LotSN=@OrgLotSN
-                    END
-                    ELSE--杂发单不修改仓库
-                    BEGIN
-                        UPDATE dbo.WW_RMInventory SET
-                            LotStatus='1',
-                            IsStorage=1,
-                            CellId=@AdviceCellId,
-                            IsExceedPicking=1
-                        WHERE LotSN=@OrgLotSN
-                    END
+					-- --库存移送到目标仓
+					-- IF @PickingListClass NOT IN('02')
+                    -- BEGIN
+                    --     UPDATE dbo.WW_RMInventory SET
+                    --         LotStatus='1',
+                    --         IsStorage=1,
+                    --         WorkcenterId=@ToWorkcenterId, --目标工作中心
+                    --         CellId=@AdviceCellId,
+                    --         IsExceedPicking=1
+                    --     WHERE LotSN=@OrgLotSN
+                    -- END
+                    -- ELSE--杂发单不修改仓库
+                    -- BEGIN
+                    --     UPDATE dbo.WW_RMInventory SET
+                    --         LotStatus='1',
+                    --         IsStorage=1,
+                    --         CellId=@AdviceCellId,
+                    --         IsExceedPicking=1
+                    --     WHERE LotSN=@OrgLotSN
+                    -- END
+                    UPDATE dbo.WW_RMInventory SET
+                                LotStatus='1',
+                                IsStorage=1
+                            WHERE LotSN=@OrgLotSN
 				END
 
 				FETCH NEXT FROM cursor2 
@@ -1920,81 +1931,129 @@ IF ISNULL(@PickingListName,'')=''
 
 	IF @PickingListClass='02'
 	BEGIN
-	IF NOT  EXISTS(SELECT ui.MatDoc FROM dbo.UploadIng AS ui WHERE ui.UploadDateId=@PickingListId AND ISNULL(ui.MatDoc,'')<>'')
-		    BEGIN  
-			 IF EXISTS(SELECT 1 FROM  dbo.UploadIng AS ui WHERE ui.UploadDateId=@PickingListId AND ui.ISUpload=1)
-			 BEGIN 
+		--杂发单单行过账：参照PickingListPR，使用游标逐行调用SAP接口
+		DECLARE cursorOther CURSOR LOCAL FAST_FORWARD FOR
+		SELECT pli.PickingListItemId,pli.ItemSequence
+		FROM dbo.PickingListItem AS pli
+		WHERE pli.QtyRequired=QtyIssued AND ISNULL(pli.ToSAPStates,'') IN ('','过账失败')
+		AND pli.PickingListId=@PickingListId
+		OPEN cursorOther
+		FETCH NEXT FROM cursorOther INTO @SPickingListItemId,@SItemSequence
+		WHILE @@FETCH_STATUS=0
+		BEGIN
+			--检查是否已有成功上传的过账记录（排除错误信息的记录）
+			IF NOT EXISTS(SELECT ui.MatDoc FROM dbo.UploadIng AS ui WHERE ui.UploadDateId=@SPickingListItemId AND ISNULL(ui.MatDoc,'')<>'' AND ui.MatDoc!='ServerMessage:物料或类型错误，暂时不支持上传SAP，请检查！！！！！')
+			BEGIN
+				--已有上传记录，直接调用过账
+				IF EXISTS(SELECT 1 FROM dbo.UploadIng AS ui WHERE ui.UploadDateId=@SPickingListItemId AND ui.ISUpload=1)
+				BEGIN
+					EXEC dbo.RfcSAPSync @I_ReturnMessage =@RFC_ReturnMessage OUTPUT,
+						@ItemName =N'U_PickingListOther',
+						@UploadIngId=@UploadIngId
 
-			EXEC dbo.RfcSAPSync @I_ReturnMessage =@I_ReturnMessage OUTPUT,
-                    @ItemName =N'U_PickingListOther',
-							@UploadIngId=@UploadIngId
+					IF @RFC_ReturnMessage LIKE '%成功%'
+					BEGIN
+						UPDATE dbo.PickingListItem set ToSAPStates='过账成功',SAPInfor=REPLACE(@RFC_ReturnMessage, 'ServerMessage:','') WHERE PickingListItemId=@SPickingListItemId
+					END
+					ELSE
+					BEGIN
+						UPDATE dbo.PickingListItem set ToSAPStates='过账失败',SAPInfor=REPLACE(@RFC_ReturnMessage, 'ServerMessage:','') WHERE PickingListItemId=@SPickingListItemId
+					END
 
-        --   SET @I_ReturnMessage=@I_ReturnMessage+@RFC_ReturnMessage+@Enter
+					SET @I_ReturnMessage=ISNULL(@I_ReturnMessage,'')+@RFC_ReturnMessage+@Enter
+				END
+				ELSE
+				BEGIN
+					--新建上传记录，然后调用过账
+					SELECT @InterfaceItemId=InterfaceItemId FROM dbo.InterfaceItem WHERE ItemName='U_PickingListOther'
 
-			 END  
-			 ELSE
-			 BEGIN 
-			 SELECT  @InterfaceItemId=InterfaceItemId FROM dbo.InterfaceItem WHERE ItemName='U_PickingListOther'
+					EXEC SysGetObjectPKId '','UploadIng',@UploadIngId OUTPUT
+					INSERT INTO dbo.UploadIng
+					(
+						UploadIngId,
+						UploadInterfaceId,
+						UploadDateId,
+						ISUpload,
+						UserId,
+						BillsMark,
+						MatDoc,
+						CreateDate
+					)
+					VALUES
+					(   @UploadIngId,
+						@InterfaceItemId,
+						@SPickingListItemId,       --单行过账：使用行级ID
+						'true',
+						@I_OrBitUserId,
+						@PickingListName+','+@SItemSequence, --单行过账：标记单据+行号
+						N'',
+						GETDATE()
+					)
 
-			exec SysGetObjectPKId '','UploadIng',@UploadIngId OUTPUT
-			INSERT INTO dbo.UploadIng
-			(
-				UploadIngId,
-				UploadInterfaceId,
-				UploadDateId,
-				ISUpload,
-				UserId,
-				BillsMark,
-				MatDoc,
-				CreateDate
-			)
-			VALUES
-			(	@UploadIngId,       -- UploadIngId - char(12)
-				@InterfaceItemId,       -- UploadInterfaceId - char(12)
-				@PickingListId,       -- UploadDateId - char(12)
-				'true',     -- ISUpload - bit
-				@I_OrBitUserId,       -- UserId - char(12)
-				@PickingListName,      -- BillsMark - nvarchar(50)
-				N'',      -- MatDoc - nvarchar(50)
-				GETDATE() -- CreateDate - datetime
-			)
+					EXEC dbo.RfcSAPSync @I_ReturnMessage =@RFC_ReturnMessage OUTPUT,
+						@ItemName =N'U_PickingListOther',
+						@UploadIngId=@UploadIngId
 
-			EXEC dbo.RfcSAPSync @I_ReturnMessage =@API_ReturnMessage OUTPUT,
-                    @ItemName =N'U_PickingListOther',
-							@UploadIngId=@UploadIngId
+					IF @RFC_ReturnMessage LIKE '%成功%'
+					BEGIN
+						UPDATE dbo.PickingListItem set ToSAPStates='过账成功',SAPInfor=REPLACE(@RFC_ReturnMessage, 'ServerMessage:','') WHERE PickingListItemId=@SPickingListItemId
+					END
+					ELSE
+					BEGIN
+						UPDATE dbo.PickingListItem set ToSAPStates='过账失败',SAPInfor=REPLACE(@RFC_ReturnMessage, 'ServerMessage:','') WHERE PickingListItemId=@SPickingListItemId
+					END
 
-				  IF @API_ReturnMessage LIKE '%成功%' 
-					BEGIN 
-					  UPDATE dbo.PickingList SET 
-							PickingListStates='40',
-							SAPInfor=REPLACE(@API_ReturnMessage, 'ServerMessage:', '')
-						WHERE PickingListId=@PickingListId
-					END 
-					ELSE 
-					BEGIN 
+					SET @I_ReturnMessage=ISNULL(@I_ReturnMessage,'')+@RFC_ReturnMessage+@Enter
+				END
+			END
+			ELSE
+			BEGIN
+				--已存在成功过账记录，直接标记为过账成功
+				UPDATE dbo.PickingListItem set ToSAPStates='过账成功',SAPInfor='' WHERE PickingListItemId=@SPickingListItemId
+			END
 
-					   UPDATE dbo.PickingList SET 
-							PickingListStates='41',
-							SAPInfor=REPLACE(@API_ReturnMessage, 'ServerMessage:', '')
-						WHERE PickingListId=@PickingListId
-					END 
+			UPDATE dbo.UploadIng SET ISUpload=0 WHERE UploadIngId=@UploadIngId
 
-         --  SET @I_ReturnMessage=@I_ReturnMessage+@RFC_ReturnMessage+@Enter
-            END  
-          UPDATE dbo.UploadIng SET ISUpload=0 WHERE UploadIngId=@UploadIngId
-      END 
-	  ELSE 
-	  BEGIN
-                 UPDATE dbo.PickingList SET 
-							PickingListStates='40'
-						WHERE PickingListId=@PickingListId
-	  END 
+			FETCH NEXT FROM cursorOther INTO @SPickingListItemId,@SItemSequence
+		END
 
+		CLOSE cursorOther
+		DEALLOCATE cursorOther
 
-		--EXEC @Api_ReturnValue=dbo.APISyncU_PickingListOtherToERP
-		--	@I_ReturnMessage = @API_ReturnMessage OUTPUT, -- nvarchar(max)
-		--	@ItemName = N'U_PickingListOther', -- nvarchar(50)
-		--	@PickingListName = @PickingListName -- nvarchar(50)
+		--更新领料单状态（参照PickingListPR的状态更新逻辑）
+		BEGIN
+			DELETE FROM @TempPickingListItem
+			--获取领料单明细数据
+			INSERT INTO @TempPickingListItem(PickingListItemId,ProductId,QtyRequired,QtyIssued,ToSAPStates)
+			SELECT PickingListItemId,ProductId,QtyRequired,QtyIssued,ToSAPStates
+			FROM dbo.PickingListItem
+			WHERE PickingListId=@PickingListId AND ISNULL(DeleteFlag,'')=''
+
+			--检查领料单是否全部发料
+			IF (SELECT COUNT(1) FROM @TempPickingListItem WHERE (ISNULL(QtyRequired,0)-ISNULL(QtyIssued,0))>0)>0
+			BEGIN
+				--更新明细行状态 20 领料中
+				UPDATE dbo.PickingListItem SET ItemStates='20'
+				WHERE PickingListItemId IN (SELECT PickingListItemId FROM @TempPickingListItem)
+
+				--更新领料单状态 20 领料中
+				UPDATE dbo.PickingList SET PickingListStates='20'WHERE PickingListId=@PickingListId
+			END
+			ELSE BEGIN
+				--检查是否全部过账成功
+				IF (SELECT COUNT(1) FROM @TempPickingListItem WHERE ISNULL(ToSAPStates,'')<>'过账成功')>0
+				BEGIN
+					UPDATE dbo.PickingList SET PickingListStates='41'WHERE PickingListId=@PickingListId
+				END
+				ELSE BEGIN
+					UPDATE dbo.PickingList SET PickingListStates='40'WHERE PickingListId=@PickingListId
+				END
+
+				--更新明细行状态 30 已完成
+				UPDATE dbo.PickingListItem SET ItemStates='30'
+				WHERE PickingListItemId IN (SELECT PickingListItemId FROM @TempPickingListItem)
+			END
+		END
 	END
 	ELSE IF @PickingListClass='03'
 	BEGIN
@@ -2175,5 +2234,4 @@ END CATCH
 
 	RETURN 0
 END
-go
-
+GO

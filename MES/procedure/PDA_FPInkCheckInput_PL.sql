@@ -10,7 +10,7 @@ GO
 -- Update comment: 预分配批次准入、实时扣库存、完工领料与占用释放
 -- Update date:  <2026/07/17>
 -- =============================================
-alter PROC [dbo].[PDA_FPInkCheckInput]
+ALTER PROC [dbo].[PDA_FPInkCheckInput_PL]
 @I_Sender NVARCHAR(200) = '',                    --客户端执行按钮
 @I_ReturnMessage NVARCHAR(MAX) = '' OUTPUT,      --返回的信息,支持多语言	
 @I_ExceptionFieldName NVARCHAR(100) = '' OUTPUT, --向客户端报告引起冲突的字段
@@ -151,6 +151,7 @@ BEGIN
 
 		IF ISNULL(@LotId,'')=''
 		BEGIN
+            insert into mwjtestlog(src,log1,log2) VALUES('灌墨',@AssyMOItemId,@MOItemTaskId)
 			SELECT '' InputScan 
 			SET @I_ExceptionFieldName = 'InputScan' 
 			SET @I_ReturnMessage = 'ServerMessage:工单【'+@MOName+'】不在当前【成品灌墨】工序节点，请检查是否进行了产线排单或已经工单完工！' + @Enter;
@@ -528,44 +529,65 @@ BEGIN
             FROM dbo.MO
             WHERE MOName = @MOName;
 
-			-- 【校验】工单扫描时校验有效预分配批次的实时库存是否覆盖分配数量
-			SET @IssueMOItemId=''
-			;WITH AllocationSummary AS
-			(
-				SELECT MOItemId,ProductId,SUM(Qty) AS AllocatedQty
-				FROM dbo.MOSemiFinishedLotAllocation
-				WHERE MOId=@MOId AND DeleteFlag='0' AND IsOccupyAllocatedQty=1
-				GROUP BY MOItemId,ProductId
-			),
-			AllocationInventory AS
-			(
-				SELECT DISTINCT MOItemId,ProductId,WWId
-				FROM dbo.MOSemiFinishedLotAllocation
-				WHERE MOId=@MOId AND DeleteFlag='0' AND IsOccupyAllocatedQty=1
-			),
-			InventorySummary AS
-			(
-				SELECT A.MOItemId,A.ProductId,SUM(ISNULL(I.Qty,0)) AS InventoryQty
-				FROM AllocationInventory A
-				LEFT JOIN dbo.WW_RMInventory I ON I.WWId=A.WWId
-					AND I.LotStatus='1' AND I.IsStorage=1
-				GROUP BY A.MOItemId,A.ProductId
-			)
-			SELECT TOP 1 @IssueMOItemId=A.MOItemId,@MProductId=A.ProductId,@CurrMaterial=ProductRoot.ProductName
-			FROM AllocationSummary A
-			LEFT JOIN InventorySummary I ON I.MOItemId=A.MOItemId AND I.ProductId=A.ProductId
-			LEFT JOIN dbo.Product P ON P.ProductId=A.ProductId
-            LEFT JOIN  dbo.ProductRoot ON ProductRoot.ProductRootId = P.ProductRootId
-			WHERE ISNULL(I.InventoryQty,0)<A.AllocatedQty
-			ORDER BY ProductRoot.ProductName
-
-			IF ISNULL(@IssueMOItemId,'')<>''
+            -- 【校验】输入工单号时检查是否全部分配完成（分配数量等于需求数量，参考 GetMOProduct）
+			-- 存在任何半成品物料行未分配完（需求 > 已分配）则拦截
+			IF EXISTS (SELECT 1 
+	            FROM dbo.MOItem mi
+	            INNER JOIN dbo.MO mo ON mo.MOId = mi.MOId
+	            INNER JOIN dbo.Product p ON p.ProductId = mi.ProductId
+	            LEFT JOIN (
+	                SELECT
+	                    MOId,
+	                    MOItemId,
+	                    ProductId,
+	                    SUM(ISNULL(Qty, 0)) AS AllocatedQty
+	                FROM dbo.MOSemiFinishedLotAllocation
+	                WHERE DeleteFlag = '0'
+	                    AND IsOccupyAllocatedQty = 1
+	                GROUP BY MOId, MOItemId, ProductId
+	            ) alloc ON alloc.MOId = mi.MOId
+	                AND alloc.MOItemId = mi.MOItemId
+	                AND alloc.ProductId = mi.ProductId
+	            WHERE mi.MOId = @MOId  
+	                AND ISNULL(mi.DeleteFlag, '') = '0'
+	                AND mi.LineSequence <> '000'
+	                AND p.ProductClassify = '2'
+	                AND CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0) - ISNULL(mi.ItemQtyIssued, 0)) > CONVERT(decimal(18, 8), ISNULL(alloc.AllocatedQty, 0))) 
 			BEGIN
 				SELECT '' AS InputScan
-				SET @I_ExceptionFieldName='InputScan'
-				SET @I_ReturnMessage='ServerMessage:[工单号]['+@MOName+'][物料号]['+ISNULL(@CurrMaterial,@MProductId)+']当前分配批次库存不足，请仓库重新分配！'+@Enter
+				SET @I_ExceptionFieldName = 'InputScan'
+				SET @I_ReturnMessage = 'ServerMessage:工单【' + @MOName + '】半成品批次预分配未完成，存在未分配完的物料，请先在仓库完成批次分配！' + @Enter
 				RETURN -1
 			END
+            -- 【校验】分配的批次的总当前库存数量要大于等于需求数量
+			IF EXISTS (SELECT 1
+				FROM dbo.MOItem mi
+				INNER JOIN dbo.Product p ON p.ProductId = mi.ProductId
+				WHERE mi.MOId = @MOId
+					AND ISNULL(mi.DeleteFlag, '') = '0'
+					AND mi.LineSequence <> '000'
+					AND p.ProductClassify = '2'
+					AND CONVERT(decimal(18, 8), ISNULL(mi.ItemQtyRequired, 0) - ISNULL(mi.ItemQtyIssued, 0)) >
+						ISNULL((
+							SELECT SUM(ISNULL(wri.Qty, 0))
+							FROM dbo.MOSemiFinishedLotAllocation a
+							INNER JOIN dbo.WW_RMInventory wri ON wri.LotSN = a.LotSN AND wri.ProductId = a.ProductId
+							WHERE a.MOId = mi.MOId
+								AND a.MOItemId = mi.MOItemId
+								AND a.DeleteFlag = '0'
+								AND a.IsOccupyAllocatedQty = 1
+								AND ISNULL(a.LotSN, '') <> ''
+								AND wri.LotStatus = '1'
+								AND wri.IsStorage = 1
+						), 0))
+			BEGIN
+				SELECT '' AS InputScan
+				SET @I_ExceptionFieldName = 'InputScan'
+				SET @I_ReturnMessage = 'ServerMessage:工单【' + @MOName + '】半成品预分配批次的库存不足，请确认库存是否充足！' + @Enter
+				RETURN -1
+			END
+
+			
 
 			SELECT @MOProductName=ProductName,@MOProductDescription=ProductDescription FROM dbo.Product 
 			INNER JOIN dbo.ProductRoot ON ProductRoot.ProductRootId = Product.ProductRootId
@@ -618,6 +640,8 @@ BEGIN
 
 			IF ISNULL(@LotId,'')=''
 			BEGIN
+                        insert into mwjtestlog(src,log1,log2) VALUES('灌墨',643,'')
+
 				SET @I_ReturnMessage = 'ServerMessage:工单【'+@MOName+'】不在当前【成品灌墨】工序节点，请检查是否进行了产线排单或已经工单完工！' + @Enter;
 			    SET @I_ExceptionFieldName = 'InputScan';					
 				RETURN -1
@@ -630,6 +654,8 @@ BEGIN
 
 			IF @SpecificationCode NOT IN('UVGM','FSGM','P00','HXGM','SXGM')--20260113新增活性、水性灌墨
 			BEGIN
+                        insert into mwjtestlog(src,log1,log2) VALUES('灌墨',657,'')
+
 				SET @I_ReturnMessage = 'ServerMessage:工单【'+@MOName+'】不在当前【成品灌墨】工序节点，请检查是否进行了产线排单或已经工单完工！' + @Enter;
 			    SET @I_ExceptionFieldName = 'InputScan';					
 				RETURN -1
@@ -766,6 +792,8 @@ BEGIN
 
 			IF ISNULL(@LotId,'')=''
 			BEGIN
+                        insert into mwjtestlog(src,log1,log2) VALUES('灌墨',795,'')
+
 				SET @I_ReturnMessage = 'ServerMessage:工单【'+@MOName+'】不在当前【成品灌墨】工序节点，请检查是否进行了产线排单或已经工单完工！' + @Enter;
 			    SET @I_ExceptionFieldName = 'InputScan';					
 				RETURN -1
@@ -1290,8 +1318,23 @@ BEGIN
 				RETURN -1
 			END CATCH
 
-			--墨水批次扫完自动完工移送
-			IF @MQtyRequired<=ISNULL(@MActualQty,0)+ISNULL(@UsedQty,0)
+			--墨水批次扫完自动完工移送（检查所有半成品物料是否都已完成）
+                -- IF @MQtyRequired<=ISNULL(@MActualQty,0)+ISNULL(@UsedQty,0)
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM dbo.MOItem mi
+                    INNER JOIN dbo.Product p ON p.ProductId = mi.ProductId
+                    WHERE mi.MOId = @MOId
+                        AND ISNULL(mi.DeleteFlag, '') = '0'
+                        AND mi.LineSequence <> '000'
+                        AND p.ProductClassify = '2'
+                        AND ISNULL(mi.ItemQtyRequired, 0) > ISNULL((
+                            SELECT SUM(ISNULL(lild.ActualQty, 0))
+                            FROM dbo.LoadingItemLotDetail lild
+                            WHERE lild.LoadingItemLotId = @LoadingItemLotId
+                                AND lild.MOItemId = mi.MOItemId
+                        ), 0)
+                )
 			BEGIN
 				INSERT @MSntemp
 				(
@@ -1459,12 +1502,11 @@ BEGIN
 
 				-- 【释放】过站报工完成后，仅释放当前上料会话实际使用批次的预分配占用
 				UPDATE A
-				SET A.IsOccupyAllocatedQty=0,A.ModifyDate=GETDATE()
-				FROM dbo.MOSemiFinishedLotAllocation A
-				INNER JOIN dbo.LoadingItemLotRecord R ON R.LotSN=A.LotSN
-				INNER JOIN dbo.LoadingItemLotDetail D ON D.LoadingItemLotDetailId=R.LoadingItemLotDetailId
-				WHERE D.LoadingItemLotId=@LoadingItemLotId AND A.MOId=@MOId
-					AND A.MOItemId=D.MOItemId AND A.DeleteFlag='0' AND A.IsOccupyAllocatedQty=1
+                    SET A.IsOccupyAllocatedQty=0,A.ModifyDate=GETDATE()
+                    FROM dbo.MOSemiFinishedLotAllocation A
+                   INNER JOIN dbo.LoadingItemLotDetail D ON A.MOItemId=D.MOItemId
+                    WHERE D.LoadingItemLotId=@LoadingItemLotId AND A.MOId=@MOId
+                        AND A.MOItemId=D.MOItemId AND A.DeleteFlag='0' AND A.IsOccupyAllocatedQty=1
 
 				SELECT @MOItemTaskName=MOItemTaskName FROM dbo.MOItemTask WHERE @MOItemTaskId= MOItemTaskId 
 				SELECT 
@@ -1863,6 +1905,219 @@ BEGIN
 					RETURN -1
 				END CATCH
 
+                --墨水批次扫完自动完工移送（检查所有半成品物料是否都已完成）
+                -- IF @MQtyRequired<=ISNULL(@MActualQty,0)+ISNULL(@UsedQty,0)
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM dbo.MOItem mi
+                    INNER JOIN dbo.Product p ON p.ProductId = mi.ProductId
+                    WHERE mi.MOId = @MOId
+                        AND ISNULL(mi.DeleteFlag, '') = '0'
+                        AND mi.LineSequence <> '000'
+                        AND p.ProductClassify = '2'
+                        AND ISNULL(mi.ItemQtyRequired, 0) > ISNULL((
+                            SELECT SUM(ISNULL(lild.ActualQty, 0))
+                            FROM dbo.LoadingItemLotDetail lild
+                            WHERE lild.LoadingItemLotId = @LoadingItemLotId
+                                AND lild.MOItemId = mi.MOItemId
+                        ), 0)
+                )
+                BEGIN
+                    INSERT @MSntemp
+                    (
+                        LotSn,
+                        Qty
+                    )
+                    SELECT LoadingItemLotRecord.LotSN,Qty  FROM  dbo.LoadingItemLotRecord 
+                    LEFT JOIN dbo.LoadingItemLotDetail ON LoadingItemLotDetail.LoadingItemLotDetailId = LoadingItemLotRecord.LoadingItemLotDetailId
+                    LEFT JOIN dbo.LoadingItemLot ON LoadingItemLot.LoadingItemLotId = LoadingItemLotDetail.LoadingItemLotId
+                    WHERE LoadingItemLot.LoadingItemLotId =@LoadingItemLotId
+
+            
+                    SELECT @MaxCnt=COUNT(*),@Counter=MIN(Id) FROM @MSntemp
+                    WHILE @Counter <= @MaxCnt AND 0 < @MaxCnt
+                    BEGIN 
+                        SELECT @tempLotSn=LotSn,@tempQty=Qty FROM @MSntemp WHERE Id=@Counter
+                        --UPDATE dbo.WW_RMInventory SET Qty=  CASE WHEN  @tempQty<Qty THEN Qty-@tempQty ELSE 0 END WHERE LotSN=@tempLotSn
+
+                        SET @Counter=@Counter+1
+                    END
+        
+                    -- 【领料】自动完工前为当前上料会话的未领料记录生成生产领料单
+                    EXEC @RESULT=dbo.PDA_ProductionMakingSubmit
+                        @I_Sender='MakingComplete',
+                        @I_ReturnMessage=@I_ReturnMessage OUTPUT,
+                        @I_ExceptionFieldName=@I_ExceptionFieldName OUTPUT,
+                        @I_PlugInCommand=@I_PlugInCommand,
+                        @I_OrBitUserId=@I_OrBitUserId,
+                        @I_OrBitUserName=@I_OrBitUserName,
+                        @I_ResourceId=@I_ResourceId,
+                        @I_ResourceName=@I_ResourceName,
+                        @LoadingItemLotId=@LoadingItemLotId
+                    IF @RESULT<>0
+                        RETURN @RESULT
+
+
+                    ---------------------------------------------------------------------------------------------
+                    SELECT  @WorkflowId=WorkflowId,@WorkflowStepId = WorkflowStepId,@SpecificationId=SpecificationId,@LotId=LotId,@Qty=Qty FROM dbo.Lot WHERE LotSN=@LotSN
+                    IF ISNULL(@SpecificationId,'') = 'SPE1000001B6'  --批次启动
+                    BEGIN 
+                        EXEC dbo.TxnBase_DataChainMainLine @DataChainId = @DataChainId OUTPUT, -- char(12)
+                                                            @TxnCode = 'DC',                      -- varchar(10)
+                                                            @I_PlugInCommand = @I_PlugInCommand,              -- varchar(5)
+                                                            @I_OrBitUserId = @I_OrBitUserId,                -- char(12)
+                                                            @I_ResourceId = @I_ResourceId,                 -- char(12)
+                                                            @LotId = @LotId,                        -- char(12)
+                                                            @MOId = @MOId,                         -- char(12)
+                                                            @MOItemId =@AssyMOItemId,                     -- char(12)
+                                                            @ProductId = @MOProductId,                    -- char(12)
+                                                            @WorkcenterId = @WorkCenterId,                 -- char(12)
+                                                            @SpecificationId =@SpecificationId,              -- char(12)
+                                                            @WorkflowStepId = @WorkflowStepId               -- char(12)		
+                        EXEC dbo.TxnBase_LotMove @I_ReturnMessage = @I_ReturnMessage OUTPUT, -- nvarchar(max)
+                                                    @I_PlugInCommand = @I_PlugInCommand  ,                    -- varchar(5)
+                                                    @I_OrBitUserId = @I_OrBitUserId,                        -- char(12)
+                                                    @I_ResourceId = @I_ResourceId,                         -- char(12)
+                                                    @LotSN = @LotSN,                                -- varchar(40)
+                                                    @LotInDate = '2021-08-23 08:47:42',         -- datetime
+                                                    @ShiftId = '',                              -- char(12)
+                                                    @UserComment = N''                          -- nvarchar(1000)			    
+                    END
+                
+                    SELECT  @WorkflowId=WorkflowId,@WorkflowStepId = WorkflowStepId,@SpecificationId=SpecificationId,@LotId=LotId,@Qty=Qty FROM dbo.Lot WHERE LotSN=@LotSN
+                    IF ISNULL(@SpecificationId,'') IN ('SPE10000028J','SPE10000028S'
+                        ,'SPE1000002AD'--20260116新增活性灌墨 mwj
+                        ,'SPE10000028S','SPE1000002AE'--20260304新增UV、水性灌墨
+                    )  --灌墨规程
+                    BEGIN 
+                        EXEC dbo.TxnBase_DataChainMainLine @DataChainId = @DataChainId OUTPUT, -- char(12)
+                                                            @TxnCode = 'DC',                      -- varchar(10)
+                                                            @I_PlugInCommand = @I_PlugInCommand,              -- varchar(5)
+                                                            @I_OrBitUserId = @I_OrBitUserId,                -- char(12)
+                                                            @I_ResourceId = @I_ResourceId,                 -- char(12)
+                                                            @LotId = @LotId,                        -- char(12)
+                                                            @MOId = @MOId,                         -- char(12)
+                                                            @MOItemId =@AssyMOItemId,                     -- char(12)
+                                                            @ProductId = @MOProductId,                    -- char(12)
+                                                            @WorkcenterId = @WorkCenterId,                 -- char(12)
+                                                            @SpecificationId =@SpecificationId,              -- char(12)
+                                                            @WorkflowStepId = @WorkflowStepId               -- char(12)			
+                    ---------------------------------------------------------------------------------------------------------------------------------		
+                        EXEC dbo.SysGetObjectPKId @ObjectId = 'LoadingItemLotMoveId',      -- char(12)
+                                                @ObjectName = N'LoadingItemLotMove',   -- nvarchar(100)
+                                                @PKID = @LoadingItemLotMoveId OUTPUT -- char(12)
+                        INSERT dbo.LoadingItemLotMove
+                        (
+                            LoadingItemLotMoveId,
+                            LoadingItemLotId,
+                            DataChainId,
+                            LotId,
+                            LotSN,
+                            InQty,
+                            OutQty,
+                            MOId,
+                            MOItemId,
+                            MOItemTaskId,
+                            ProductId,
+                            WorkflowId,
+                            WorkflowStepId,
+                            SpecificationId,
+                            Operator,
+                            WorkcenterId,
+                            EquipmentId,
+                            ResourceId,
+                            UserId,
+                            CreateDate
+                        )
+                        VALUES
+                        (   @LoadingItemLotMoveId,     -- LoadingItemLotMoveId - IDType
+                            @LoadingItemLotId,     -- LoadingItemLotId - IDType
+                            @DataChainId,     -- DataChainId - IDType
+                            @LotId,     -- LotId - IDType
+                            @LotSN,     -- LotSN - LotSN
+                            @Qty,     -- InQty - SysNumberType
+                            @InputNumber,     -- OutQty - SysNumberType
+                            @MOId,     -- MOId - IDType
+                            @AssyMOItemId,     -- MOItemId - IDType
+                            @MOItemTaskId,     -- MOItemTaskId - IDType
+                            @MOProductId,     -- ProductId - IDType
+                            @WorkflowId,     -- WorkflowId - IDType
+                            @WorkflowStepId,     -- WorkflowStepId - IDType
+                            @SpecificationId,     -- SpecificationId - IDType
+                            @I_OrBitUserName,      -- Operator - nvarchar(50)
+                            @WorkCenterId,     -- WorkcenterId - IDType
+                            NULL,     -- EquipmentId - IDType
+                            @I_ResourceId,     -- ResourceId - IDType
+                            @I_OrBitUserId,     -- UserId - IDType
+                            GETDATE() -- CreateDate - datetime
+                            )
+
+                        EXEC dbo.TxnBase_LotMove @I_ReturnMessage = @I_ReturnMessage OUTPUT, -- nvarchar(max)
+                                                    @I_PlugInCommand = @I_PlugInCommand  ,                    -- varchar(5)
+                                                    @I_OrBitUserId = @I_OrBitUserId,                        -- char(12)
+                                                    @I_ResourceId = @I_ResourceId,                         -- char(12)
+                                                    @LotSN = @LotSN,                                -- varchar(40)
+                                                    @LotInDate = '2021-08-23 08:47:42',         -- datetime
+                                                    @ShiftId = '',                              -- char(12)
+                                                    @UserComment = N''                          -- nvarchar(1000)			    
+                    END
+
+                    SELECT @WorkflowId=WorkflowId,@WorkflowStepId = WorkflowStepId,@SpecificationId=SpecificationId,@LotId=LotId FROM dbo.Lot WHERE LotSN=@LotSN
+                    EXEC dbo.TxnBase_DataChainMainLine @DataChainId = @DataChainId OUTPUT, -- char(12)
+                                                        @TxnCode = 'DC',                      -- varchar(10)
+                                                        @I_PlugInCommand = @I_PlugInCommand,              -- varchar(5)
+                                                        @I_OrBitUserId = @I_OrBitUserId,                -- char(12)
+                                                        @I_ResourceId = @I_ResourceId,                 -- char(12)
+                                                        @LotId = @LotId,                        -- char(12)
+                                                        @MOId = @MOId,                         -- char(12)
+                                                        @MOItemId =@AssyMOItemId,                     -- char(12)
+                                                        @ProductId = @MOProductId,                    -- char(12)
+                                                        @WorkcenterId = @WorkCenterId,                 -- char(12)
+                                                        @SpecificationId =@SpecificationId,              -- char(12)
+                                                        @WorkflowStepId = @WorkflowStepId               -- char(12)			
+                
+            
+                    IF EXISTS(SELECT 1 FROM dbo.MoCraftPath WHERE MoId=@MOId AND WorkstageNO='10')
+                    BEGIN
+                    EXEC dbo.MOProductionOrder 
+                                            @I_ReturnMessage = @I_ReturnMessage1 OUTPUT,            -- nvarchar(max)
+                                            @I_ExceptionFieldName = @I_ExceptionFieldName1 OUTPUT,  -- nvarchar(100)
+                                            @MOID = @MOId,                                           -- char(12)
+                                            @Line = '10',                                 -- nvarchar(30)
+                                            @Qty = @Qty                                            -- nvarchar(30)
+                    END
+
+                    -- 【释放】过站报工完成后，仅释放当前上料会话实际使用批次的预分配占用
+                    UPDATE A
+                    SET A.IsOccupyAllocatedQty=0,A.ModifyDate=GETDATE()
+                    FROM dbo.MOSemiFinishedLotAllocation A
+                   INNER JOIN dbo.LoadingItemLotDetail D ON A.MOItemId=D.MOItemId
+                    WHERE D.LoadingItemLotId=@LoadingItemLotId AND A.MOId=@MOId
+                        AND A.MOItemId=D.MOItemId AND A.DeleteFlag='0' AND A.IsOccupyAllocatedQty=1
+
+                    SELECT @MOItemTaskName=MOItemTaskName FROM dbo.MOItemTask WHERE @MOItemTaskId= MOItemTaskId 
+                    SELECT 
+                            '' AS Command,
+                        --	'' AS EmployeeNo,
+                        --	'' AS ProductionLine,
+                            '' AS SpecificationCode,
+                            '' AS MOName , 
+                            '' AS InputScan,
+                            '0' AS InputNumber,
+                            '' AS FMOQty,
+                            '' AS MOProduct,			
+                            '' AS MOItemTaskName,
+                            '' AS LoadingItemLotId,
+                            '' AS LoadingItemLotRecordId,
+                            '' AS MQtyRequired ,
+                            '' AS MActualQty,
+                            ''  AS CurrMaterial,
+                            '' AS SrcLotSnList
+                    SET @I_ExceptionFieldName = 'InputScan';	
+                    SET @I_ReturnMessage = 'ServerMessage: 工单任务【'+ISNULL(@MOItemTaskName,'')+'】墨水已全部使用，已自动为您完成生产灌墨！' + @Enter +'报工信息：' +ISNULL(@I_ReturnMessage1,'');
+                    RETURN 0;
+                END
+
 				SELECT  '0' AS InputNumber,
 						ISNULL(@MQtyRequired,0) AS MQtyRequired ,
 						ISNULL(@CurrMActualQty,0.001) AS MActualQty,
@@ -2049,12 +2304,11 @@ BEGIN
 
 			-- 【释放】过站报工完成后，仅释放当前上料会话实际使用批次的预分配占用
 			UPDATE A
-			SET A.IsOccupyAllocatedQty=0,A.ModifyDate=GETDATE()
-			FROM dbo.MOSemiFinishedLotAllocation A
-			INNER JOIN dbo.LoadingItemLotRecord R ON R.LotSN=A.LotSN
-			INNER JOIN dbo.LoadingItemLotDetail D ON D.LoadingItemLotDetailId=R.LoadingItemLotDetailId
-			WHERE D.LoadingItemLotId=@LoadingItemLotId AND A.MOId=@MOId
-				AND A.MOItemId=D.MOItemId AND A.DeleteFlag='0' AND A.IsOccupyAllocatedQty=1
+                    SET A.IsOccupyAllocatedQty=0,A.ModifyDate=GETDATE()
+                    FROM dbo.MOSemiFinishedLotAllocation A
+                   INNER JOIN dbo.LoadingItemLotDetail D ON A.MOItemId=D.MOItemId
+                    WHERE D.LoadingItemLotId=@LoadingItemLotId AND A.MOId=@MOId
+                        AND A.MOItemId=D.MOItemId AND A.DeleteFlag='0' AND A.IsOccupyAllocatedQty=1
 
 			SELECT @MOItemTaskName=MOItemTaskName FROM dbo.MOItemTask WHERE @MOItemTaskId= MOItemTaskId 
             SELECT 
