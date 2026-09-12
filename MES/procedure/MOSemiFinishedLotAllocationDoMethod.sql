@@ -142,8 +142,7 @@ BEGIN
 		-- 【校验】物料 ID 不能为空
 		IF ISNULL(@MOItemId, '') = ''
 		BEGIN
-			SET @I_ReturnMessage = N'ServerMessage:请选择有效半成品行!'
-			RETURN -1
+			return 0
 		END
         select @ProductId=productid from MOItem where MOItemId=@MOItemId
 
@@ -151,24 +150,33 @@ BEGIN
 		SELECT
 			wri.WWId,
 			wri.ProductId,
+            f.FactoryName,
+			w.WorkcenterName,
 			pr.ProductName,
 			p.ProductDescription,
 			wri.LotSN,
 			wri.ProductionLotNO,
-			f.FactoryName,
-			w.WorkcenterName,
             CONVERT(decimal(18, 8), ISNULL(wri.Qty, 0) - ISNULL(alloc.AllocatedQty, 0)) AS 可分配数量,
 			CONVERT(decimal(18, 8), ISNULL(wri.Qty, 0)) AS 批次数量,
 			CONVERT(decimal(18, 8), ISNULL(alloc.AllocatedQty, 0)) AS 已分配数量,
+            LotStatusTable.UserCodeDescription AS LotStatus,
+            QCStatusTable.UserCodeDescription AS QCStatus,
 			wri.ProductionDate,
-			wri.ValidityEndDate,
-			wri.EntryDate
+            wri.EntryDate,
+            wri.ValidityEndDate,
+            wri.SAPRemark,pi.Note AS 'SAP备注',HoldResult as '锁定原因',
+		    MO.NoteMessage AS '生产备注信息'
 		FROM dbo.WW_RMInventory wri
 		INNER JOIN dbo.Product p ON p.ProductId = wri.ProductId
 		LEFT JOIN dbo.ProductRoot pr ON pr.ProductRootId = p.ProductRootId
 		LEFT JOIN dbo.Factory f ON f.FactoryId = wri.FactoryId
 		LEFT JOIN dbo.Workcenter w ON w.WorkcenterId = wri.WorkcenterId
 		LEFT JOIN dbo.Cell c ON c.CellId = wri.CellId
+        LEFT JOIN UserCode_Table('URC100000AA9') LotStatusTable ON wri.LotStatus=LotStatusTable.UserCodeName
+        LEFT JOIN UserCode_Table('URC100000AMP') QCStatusTable ON wri.QCStatus=QCStatusTable.UserCodeName
+        LEFT JOIN ProductInventory pi ON pi.ProductId = wri.ProductId AND pi.LotSN=wri.ProductionLotNO AND
+            pi.WorkcenterId=wri.WorkcenterId AND pi.DeleteFlag='0'
+        LEFT JOIN dbo.MO ON MO.MOId = wri.MOId
 		LEFT JOIN (
 			-- 【准备】按 LotSN 汇总有效占用中的预分配数量，用于扣减可用库存
 			SELECT
@@ -218,9 +226,9 @@ BEGIN
 			a.ProductionLotNO,
 			-- c.CellName,
 			u.UOMName,
-			CONVERT(decimal(18, 8), ISNULL(a.Qty, 0)) AS Qty,
+			CONVERT(decimal(18, 8), ISNULL(a.Qty, 0)) AS '分配数量',
 			a.CreateDate,
-			CONVERT(decimal(18, 8), ISNULL(wri.Qty, 0)) AS StockQty,
+			CONVERT(decimal(18, 8), ISNULL(wri.Qty, 0)) AS '库存数量',
 			LotStatusTable.UserCodeDescription AS LotStatus,
             wri.ProductionDate,
 			wri.ValidityEndDate,
@@ -236,7 +244,7 @@ BEGIN
         LEFT JOIN UserCode_Table('URC100000AA9') LotStatusTable ON wri.LotStatus=LotStatusTable.UserCodeName
 		WHERE a.MOitemId = @MOItemId
 			-- 【过滤】只返回有效分配记录
-			AND a.DeleteFlag = '0' and wri.IsStorage=1
+			AND a.DeleteFlag = '0' and a.IsOccupyAllocatedQty=1
 		ORDER BY a.CreateDate DESC, a.LotSN
 
 		RETURN 0
@@ -249,7 +257,8 @@ BEGIN
 		-- 【校验】工单物料行与批次号不能为空
 		IF ISNULL(@MOItemId, '') = ''
 		BEGIN
-			RETURN 0
+			SET @I_ReturnMessage = N'ServerMessage:请选择有效半成品行!'
+			RETURN -1
 		END
 
 		IF ISNULL(@BoxOrLotSN, '') = ''
