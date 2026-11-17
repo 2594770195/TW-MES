@@ -27,7 +27,8 @@ namespace ScriptProj
         /// MES事务插件接口全局对象，它提供了MES事务对象的所有的接口属性与接口方法
         /// </summary>
         public OrBitScript.OrBitAPI Scripter = new OrBitScript.OrBitAPI(); 
-
+		
+		//public OrBitScript.OrBitMetaAPI Scripter = new OrBitScript.OrBitMetaAPI();  
         /// <summary>
         /// 脚本对象实例化时加载时的方法
         /// </summary>
@@ -80,7 +81,12 @@ namespace ScriptProj
         /// <returns>True表示继续,False表示退回</returns>
         public bool ButtonClickBefore(string ButtonName)
         {
- 		    //to do..
+ 		    if ( ButtonName == "UpdateAssignLot")
+		    {
+				Scripter.SetParameterValue("QueryParameter","11");
+				Scripter.SetParameterValue("MOItemId","11");
+		        OrBitUserDialog.Dialog.Show(Scripter,"Txn Assign Lot","测试",ButtonName);
+		    }
 	       	return true;         
         }
         
@@ -94,15 +100,21 @@ namespace ScriptProj
         }
 
         /// <summary>
-        /// 容器中按钮触发时的通用检查后置事件
-        /// </summary>
-        /// <param name="ButtonName">按钮名</param>
+		/// 容器中按钮触发时的通用检查后置事件
+		/// </summary>
+		/// <param name="ButtonName">按钮名</param>
 		/// <param name="SPResult">存储过程执行的结果值</param>
 		/// <param name="SPMessage">存储过程执行的返回消息</param>
-        public void ButtonClickAfter(string ButtonName,bool SPResult,string SPMessage)
-        {
- 		    //to do..      
-        }
+		public void ButtonClickAfter(string ButtonName, bool SPResult, string SPMessage)
+		{
+//		    if (SPResult && ButtonName == "UpdateAssignLot")
+//		    {
+//				Scripter.SetParameterValue("QueryParameter","11");
+//				Scripter.SetParameterValue("MOItemId","11");
+//		        OrBitUserDialog.Dialog.Show(Scripter,"Txn Assign Lot","测试",ButtonName);
+//		    }
+			
+		}
 
         /// <summary>
         /// 容器中网格或下拉列表选中某行时的触发事件
@@ -112,6 +124,7 @@ namespace ScriptProj
         /// <param name="CellB">选中行第二列的值</param>
 	    public void RowSelected(string ParameterName, string CellA, string CellB)
         { 
+			
 		    //to do..        	
         }
 

@@ -22,9 +22,15 @@ create table [dbo].[MOSemiFinishedLotAllocation]
     Qty                           decimal(18, 8)
         constraint DF_MOSemiFinishedLotAllocation_Qty default 0 not null, -- 分配数量
     IsOccupyAllocatedQty          bit
-        constraint DF_MOSemiFinishedLotAllocation_IsOccupyAllocatedQty default 1 not null, -- 是否占用已分配数量
+        constraint DF_MOSemiFinishedLotAllocation_IsOccupyAllocatedQty default 1 not null, -- 是否占用已分配数量：1=占用(确认或未确认)，删除时置 0 释放
+    ConfirmStatus                 char(1)
+        constraint DF_MOSemiFinishedLotAllocation_ConfirmStatus default '0' not null, -- 确认状态：0=未确认(仅当前单号分配时占用库存)，1=已确认(永久占用库存)
+    allow_batch                  bit
+        constraint DF_MOSemiFinishedLotAllocation_allow_batch default 0 not null, -- 是否分批分配：0=不分批(确认时需足量)，1=分批(可部分分配)
     DeleteFlag                    char(1)
         constraint DF_MOSemiFinishedLotAllocation_DeleteFlag default '0' not null, -- 逻辑删除：0=有效，1=删除
+    SAPSyncFlag                   char(1)
+        constraint DF_MOSemiFinishedLotAllocation_SAPSyncFlag default '0' not null, -- SAP同步状态：0=未同步(待同步)，1=已同步；任何ConfirmStatus='1'的修改都置回'0'，由统一同步逻辑循环调用未同步记录的MO上报
     CreateUserId                  char(12)       null,     -- 创建人 ID
     CreateUserName                nvarchar(100)  null,     -- 创建人名称
     CreateDate                    datetime
@@ -74,7 +80,11 @@ EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=N'单位 ID' , @
 GO
 EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=N'本次预分配数量' , @level0type=N'SCHEMA',@level0name=N'dbo', @level1type=N'TABLE',@level1name=N'MOSemiFinishedLotAllocation', @level2type=N'COLUMN',@level2name=N'Qty'
 GO
-EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=N'是否占用已分配数量，1=占用，0=不占用；新增记录默认 1' , @level0type=N'SCHEMA',@level0name=N'dbo', @level1type=N'TABLE',@level1name=N'MOSemiFinishedLotAllocation', @level2type=N'COLUMN',@level2name=N'IsOccupyAllocatedQty'
+EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=N'是否占用已分配数量，1=占用，0=不占用；新增记录默认 1，删除时置 0 释放占用' , @level0type=N'SCHEMA',@level0name=N'dbo', @level1type=N'TABLE',@level1name=N'MOSemiFinishedLotAllocation', @level2type=N'COLUMN',@level2name=N'IsOccupyAllocatedQty'
+GO
+EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=N'确认状态，0=未确认(仅当前单号分配时占用库存)，1=已确认(永久占用库存)' , @level0type=N'SCHEMA',@level0name=N'dbo', @level1type=N'TABLE',@level1name=N'MOSemiFinishedLotAllocation', @level2type=N'COLUMN',@level2name=N'ConfirmStatus'
+GO
+EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=N'是否分批分配，0=不分批(确认时需足量)，1=分批(可部分分配)' , @level0type=N'SCHEMA',@level0name=N'dbo', @level1type=N'TABLE',@level1name=N'MOSemiFinishedLotAllocation', @level2type=N'COLUMN',@level2name=N'allow_batch'
 GO
 EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=N'逻辑删除标记，0=有效，1=删除；查询和库存扣减只统计 0' , @level0type=N'SCHEMA',@level0name=N'dbo', @level1type=N'TABLE',@level1name=N'MOSemiFinishedLotAllocation', @level2type=N'COLUMN',@level2name=N'DeleteFlag'
 GO
@@ -85,4 +95,52 @@ GO
 EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=N'创建时间' , @level0type=N'SCHEMA',@level0name=N'dbo', @level1type=N'TABLE',@level1name=N'MOSemiFinishedLotAllocation', @level2type=N'COLUMN',@level2name=N'CreateDate'
 GO
 EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=N'修改时间' , @level0type=N'SCHEMA',@level0name=N'dbo', @level1type=N'TABLE',@level1name=N'MOSemiFinishedLotAllocation', @level2type=N'COLUMN',@level2name=N'ModifyDate'
+GO
+
+-- =============================================
+-- 已存在表的升级脚本（新库执行上方 create table 即可忽略此段）
+-- 为既有表补充 ConfirmStatus 确认状态字段 / allow_batch 是否分批字段
+-- =============================================
+IF NOT EXISTS (
+    SELECT 1 FROM sys.columns
+    WHERE object_id = OBJECT_ID(N'dbo.MOSemiFinishedLotAllocation')
+        AND name = N'ConfirmStatus'
+)
+BEGIN
+    ALTER TABLE dbo.MOSemiFinishedLotAllocation
+        ADD ConfirmStatus char(1) NOT NULL
+        CONSTRAINT DF_MOSemiFinishedLotAllocation_ConfirmStatus DEFAULT '0'
+
+    EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=N'确认状态，0=未确认(仅当前单号分配时占用库存)，1=已确认(永久占用库存)' , @level0type=N'SCHEMA',@level0name=N'dbo', @level1type=N'TABLE',@level1name=N'MOSemiFinishedLotAllocation', @level2type=N'COLUMN',@level2name=N'ConfirmStatus'
+END
+GO
+
+-- 为既有表补充 allow_batch 是否分批分配字段
+IF NOT EXISTS (
+    SELECT 1 FROM sys.columns
+    WHERE object_id = OBJECT_ID(N'dbo.MOSemiFinishedLotAllocation')
+        AND name = N'allow_batch'
+)
+BEGIN
+    ALTER TABLE dbo.MOSemiFinishedLotAllocation
+        ADD allow_batch bit NOT NULL
+        CONSTRAINT DF_MOSemiFinishedLotAllocation_allow_batch DEFAULT 0
+
+    EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=N'是否分批分配，0=不分批(确认时需足量)，1=分批(可部分分配)' , @level0type=N'SCHEMA',@level0name=N'dbo', @level1type=N'TABLE',@level1name=N'MOSemiFinishedLotAllocation', @level2type=N'COLUMN',@level2name=N'allow_batch'
+END
+GO
+
+-- 为既有表补充 SAPSyncFlag SAP同步状态字段
+IF NOT EXISTS (
+    SELECT 1 FROM sys.columns
+    WHERE object_id = OBJECT_ID(N'dbo.MOSemiFinishedLotAllocation')
+        AND name = N'SAPSyncFlag'
+)
+BEGIN
+    ALTER TABLE dbo.MOSemiFinishedLotAllocation
+        ADD SAPSyncFlag char(1) NOT NULL
+        CONSTRAINT DF_MOSemiFinishedLotAllocation_SAPSyncFlag DEFAULT '0'
+
+    EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=N'SAP同步状态，0=未同步(待同步)，1=已同步；任何ConfirmStatus=1的记录被修改/取消/扣数后都置回0，操作完成后由统一同步逻辑循环调用存在未同步记录的MO上报SAP，同步成功置1' , @level0type=N'SCHEMA',@level0name=N'dbo', @level1type=N'TABLE',@level1name=N'MOSemiFinishedLotAllocation', @level2type=N'COLUMN',@level2name=N'SAPSyncFlag'
+END
 GO

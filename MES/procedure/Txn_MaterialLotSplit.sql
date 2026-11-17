@@ -23,13 +23,19 @@ CREATE PROCEDURE  [dbo].[Txn_MaterialLotSplit]
 @I_Parameter NVARCHAR(100)='',		--插件参数	
 
 @SplitLotSN NVARCHAR(100)='',		--被拆批号
-@SplitQty DECIMAL(18,6)=0           --拆出数量
+@SplitQty DECIMAL(18,6)=0,          --拆出数量
+@NewSplitLotSN NVARCHAR(100)='' OUTPUT, --拆出生成的新批号（输出给调用方）
+@IsSilent BIT=0                     --是否静默执行：1=不返回结果集（供存储过程嵌套调用）
 
 
 AS
 BEGIN
 	SET NOCOUNT ON;
 	SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+
+	--初始化输出参数
+	SET @NewSplitLotSN=''
+	SET @IsSilent=ISNULL(@IsSilent,0)
 
 	DECLARE @return_value INT
 	DECLARE @ProductId CHAR(12)
@@ -60,7 +66,7 @@ BEGIN
 	IF NOT EXISTS(SELECT 1 FROM dbo.SNRule WHERE SNRuleName=@SNRuleName_LotSN AND IsActivity=1)
 	BEGIN
 		SET @I_ReturnMessage='ServerMessage:未维护或没有激活 材料批次拆分 序列号规则【MP_LotSN】，请检查！请联系IT人员处理'
-		SELECT '' AS SplitLotSN
+		IF @IsSilent=0 SELECT '' AS SplitLotSN
 		RETURN -1
 	END
 
@@ -71,7 +77,7 @@ BEGIN
 	IF ISNULL(@SplitLotSN,'') =''
 	BEGIN
 		SET @I_ReturnMessage='ServerMessage:请扫描拆分批次!'
-		SELECT '' AS SplitLotSN
+		IF @IsSilent=0 SELECT '' AS SplitLotSN
 		SET @I_ExceptionFieldName = 'SplitLotSN'
 		RETURN -1
 	END
@@ -80,7 +86,7 @@ BEGIN
 	IF NOT EXISTS(SELECT 1 FROM dbo.WW_RMInventory WHERE LotSN=@SplitLotSN)
 	BEGIN
 		SET @I_ReturnMessage='ServerMessage:原批号【'+@SplitLotSN+'】不存在!'
-		SELECT '' AS SplitLotSN
+		IF @IsSilent=0 SELECT '' AS SplitLotSN
 		SET @I_ExceptionFieldName = 'SplitLotSN'
 		RETURN -1
 	END
@@ -88,7 +94,7 @@ BEGIN
 	IF NOT EXISTS(SELECT 1 FROM dbo.WW_RMInventory WHERE LotSN=@SplitLotSN AND LotStatus='1')
 	BEGIN
 		SET @I_ReturnMessage='ServerMessage:原批号【'+@SplitLotSN+'】状态不可用!'
-		SELECT '' AS SplitLotSN
+		IF @IsSilent=0 SELECT '' AS SplitLotSN
 		SET @I_ExceptionFieldName = 'SplitLotSN'
 		RETURN -1
 	END
@@ -112,7 +118,7 @@ BEGIN
 	IF ISNULL(@WWId,'') =''
 	BEGIN
 		SET @I_ReturnMessage='ServerMessage:物料库存中未找到原批号【'+@SplitLotSN+'】,请检查!'
-		SELECT '' AS SplitLotSN
+		IF @IsSilent=0 SELECT '' AS SplitLotSN
 		SET @I_ExceptionFieldName = 'SplitLotSN'
 		RETURN -1	
 	END
@@ -120,7 +126,7 @@ BEGIN
 	--显示批次信息
 	IF ISNULL(@I_Sender,'')='LotShow'
 	BEGIN
-		SELECT @ProductName AS ProductName,@ProductDescription AS ProductDescription,0 AS SplitQty,@WWQty AS LotQty
+		IF @IsSilent=0 SELECT @ProductName AS ProductName,@ProductDescription AS ProductDescription,0 AS SplitQty,@WWQty AS LotQty
 
 		SET @I_ReturnMessage='ServerMessage:物料批次【'+@SplitLotSN+'】有效!'
 		SET @I_ExceptionFieldName='SplitQty'
@@ -130,7 +136,7 @@ BEGIN
 	IF ISNULL(@SplitQty,0) <= 0
 	BEGIN
 		SET @I_ReturnMessage = 'ServerMessage:请输入拆分数量,且数量必须大于零!' 
-		SELECT '' AS SplitQty
+		IF @IsSilent=0 SELECT '' AS SplitQty
 		SET @I_ExceptionFieldName = 'SplitQty'
 		RETURN -1
 	END
@@ -177,6 +183,9 @@ BEGIN
 		SET @I_ReturnMessage ='ServerMessage:拆分生成批号失败！条码【'+@NewSN+'】已存在'
 		RETURN -1
 	END
+	
+	--输出拆出的新批号，供调用方（如PDA_ToFac）使用
+	SET @NewSplitLotSN=@NewSN
 	
 	--更新库存表中原批号的数量（源批号数量）
 	UPDATE dbo.WW_RMInventory SET 
@@ -291,7 +300,7 @@ BEGIN
 -- 		WHERE WW.WWId IN (SELECT WWId FROM @LotTemp) 
 -- 	END
 
-	SELECT '' AS SplitLotSN,'' AS ProductName,'' AS LotQty,'' AS ProductDescription,0 AS SplitQty
+	IF @IsSilent=0 SELECT '' AS SplitLotSN,'' AS ProductName,'' AS LotQty,'' AS ProductDescription,0 AS SplitQty
 	SET @I_ExceptionFieldName='SplitLotSN'
 	SET @I_ReturnMessage='ServerMessage:批号【'+@SplitLotSN+'】成功将数量【' + CAST(CAST(@SplitQty AS FLOAT) AS VARCHAR)+ '】转移到新批号【'+@NewSN+'】!'
 	

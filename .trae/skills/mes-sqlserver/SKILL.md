@@ -1,8 +1,7 @@
 ---
 name: mes-sqlserver
-description: MES 制造执行系统 SQL Server 数据库开发规范。编写或修改表结构、存储过程、批处理脚本时使用。适用于 MES、OrBitMOMTestBack、库存、领料、质检、WMS 同步等 SQL Server 开发场景。
+description: MES 制造执行系统 SQL Server 数据库开发规范。编写或修改表结构、存储过程、批处理脚本时使用。适用于 MES、OrBitMOMTestBack（开发库）/OrBitMOM（生产库）、库存、领料、质检、WMS 同步等 SQL Server 开发场景。
 ---
-
 # MES SQL Server 开发
 
 ## 开发前必读
@@ -13,12 +12,12 @@ description: MES 制造执行系统 SQL Server 数据库开发规范。编写或
 
 ## 目录约定
 
-| 类型 | 路径 | 说明 |
-|---|---|---|
-| 表结构 | `MES/table/` | 每个表一个 `.sql` 文件，文件名与表名一致 |
-| 存储过程 | `MES/procedure/` | 每个过程一个 `.sql` 文件 |
-| 规格文档 | `.spec-workflow/specs/` | 需求、设计、任务 |
-| 技术约束 | `.spec-workflow/steering/` | 架构与开发原则 |
+| 类型     | 路径                         | 说明                                       |
+| -------- | ---------------------------- | ------------------------------------------ |
+| 表结构   | `MES/table/`               | 每个表一个 `.sql` 文件，文件名与表名一致 |
+| 存储过程 | `MES/procedure/`           | 每个过程一个 `.sql` 文件                 |
+| 规格文档 | `.spec-workflow/specs/`    | 需求、设计、任务                           |
+| 技术约束 | `.spec-workflow/steering/` | 架构与开发原则                             |
 
 **查找表字段**：先在 `MES/table/` 搜索对应表名，确认字段名、类型、主键后再写 SQL，禁止凭记忆猜字段。
 
@@ -26,7 +25,8 @@ description: MES 制造执行系统 SQL Server 数据库开发规范。编写或
 
 ## 数据库约束
 
-- 数据库：**OrBitMOMTestBack**（仅此库，禁止跨库访问）。
+- 数据库范围：只看 **OrBitMOMTestBack**（开发/测试库，连接串见仓库配置 `web/stocktake-import/backend/StocktakeImport.Api/appsettings.Development.json`）与 **OrBitMOM**（生产库）；**OrBitMOMTest 等其他库不看、不取数、不用于校验**。
+- 校验 SQL 是否可执行时，只连上面两个库；库结构有差异时以这两个库为准（例如 `dbo.MO.SoItemSequence` 在 OrBitMOMTestBack 与 OrBitMOM 存在）。
 - 方言：**SQL Server**（T-SQL）。
 - 除 SELECT 外，INSERT/UPDATE/DELETE/DDL 脚本仅供提交审批，不直接在生产执行。
 - 禁止 SQL 字符串拼接；存储过程参数、应用层调用均使用参数化。
@@ -105,6 +105,7 @@ DECLARE @i INT                     -- 循环计数器
 DECLARE @RemainQty DECIMAL(18, 6)
 DECLARE @x INT
 ```
+
 ### 事务与错误
 
 - 多表写操作使用 `BEGIN TRAN` / `COMMIT` / `ROLLBACK`，按仓库或业务单元划分事务时注意注释范围。
@@ -180,14 +181,14 @@ WHERE ...
 
 ## 常见业务模块前缀
 
-| 前缀 | 典型用途 |
-|---|---|
-| `Picking*` / `PickingList*` | 领料单 |
-| `Txn_*` | 事务类操作 |
-| `PDA_*` | PDA 端查询/提交 |
-| `APISync*` / `WebAPI_*` | 与 WMS/外部系统同步 |
-| `Vendor_*` | 供应商相关 |
-| `Txn_QC_*` | 质检 |
+| 前缀                            | 典型用途            |
+| ------------------------------- | ------------------- |
+| `Picking*` / `PickingList*` | 领料单              |
+| `Txn_*`                       | 事务类操作          |
+| `PDA_*`                       | PDA 端查询/提交     |
+| `APISync*` / `WebAPI_*`     | 与 WMS/外部系统同步 |
+| `Vendor_*`                    | 供应商相关          |
+| `Txn_QC_*`                    | 质检                |
 
 ## 工作流程
 
